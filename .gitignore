@@ -1,0 +1,7 @@
+# Rust build artifacts; the packaged archives in lib/ ARE committed.
+/target/
+/patched-anydoc/
+/.anydoc-unpack/
+.anydoc-*.crate
+zig-cache/
+.zig-cache/

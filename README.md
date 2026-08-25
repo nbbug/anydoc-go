@@ -1,0 +1,323 @@
+# anydoc-go
+
+Go bindings for [anydoc](https://github.com/firecrawl/anydoc) — the Rust
+library that converts Word, PowerPoint, Excel, OpenDocument, RTF, EPUB, CSV,
+and PDF documents to GitHub-Flavored Markdown.
+
+anydoc-go links anydoc as a **static library through cgo**, with prebuilt
+archives packaged in the module for every supported platform. Users of this
+module never install Rust or any other toolchain: `go get` downloads the
+archive and `go build` links it.
+
+[中文文档](README.zh-CN.md)
+
+## Requirements
+
+| | |
+| --- | --- |
+| Go | ≥ 1.22 |
+| CGO | `CGO_ENABLED=1` (the Go default on all supported platforms) |
+| C toolchain | the standard one for your OS — Xcode CLT on macOS, gcc on Linux, mingw-w64 on Windows |
+| Rust | **not required** to use the module; only to rebuild the archives |
+
+## Install
+
+```
+go get github.com/your-org/anydoc-go
+```
+
+> **Rename before publishing:** the module path in [go.mod](go.mod) is a
+> placeholder. After creating your GitHub repository, change one line in
+> `go.mod`, the two `import` lines under [examples/](examples/), and the
+> import paths in this README.
+
+## Quickstart
+
+```go
+package main
+
+import (
+	"fmt"
+	"os"
+
+	anydoc "github.com/your-org/anydoc-go"
+)
+
+func main() {
+	// Convert a file: the format is detected from the content.
+	markdown, err := anydoc.ToMarkdown("report.docx")
+	if err != nil {
+		panic(err)
+	}
+	fmt.Print(markdown)
+
+	// Convert bytes that are already in memory. Signature-less formats
+	// like CSV must be named explicitly.
+	data, err := os.ReadFile("data.csv")
+	if err != nil {
+		panic(err)
+	}
+	md, err := anydoc.ToMarkdownBytes(data, &anydoc.FormatCsv)
+	// ...
+	_ = md
+}
+```
+
+Runnable examples live in [examples/](examples/):
+
+```
+go run ./examples/convert -file report.docx
+go run ./examples/parse   -file report.docx
+```
+
+## Supported platforms
+
+The module packages a prebuilt archive for each combination below; the Go
+compiler selects the right one automatically with build tags. Every archive
+is a single file named `libanydoc_go.a` under `lib/<platform>/`.
+
+| Platform | Rust target | C toolchain used for linking |
+| --- | --- | --- |
+| linux/amd64 | `x86_64-unknown-linux-gnu` | gcc |
+| linux/arm64 | `aarch64-unknown-linux-gnu` | gcc (aarch64) |
+| darwin/amd64 | `x86_64-apple-darwin` | clang (Xcode CLT) |
+| darwin/arm64 | `aarch64-apple-darwin` | clang (Xcode CLT) |
+| windows/amd64 | `x86_64-pc-windows-gnu` | mingw-w64 gcc |
+
+Notes:
+
+- **Windows uses the GNU target.** Go's cgo links with mingw gcc, which reads
+  GNU archives; an MSVC `.lib` would complicate linking and could not be
+  produced by `cross`. If you need MSVC specifically, build it on a Windows
+  runner with the native toolchain and add a `lib_windows_amd64_msvc.go`
+  variant.
+- **Linux is glibc.** Alpine/musl users must rebuild the archive
+  (`./scripts/build-all.sh linux_amd64` inside an Alpine image or with
+  `cargo-zigbuild`, then commit it). musl cannot be auto-detected by Go build
+  tags, so the reference WeKnora binding ships a parallel `-tags musl` variant;
+  this module keeps the matrix minimal and can adopt the same pattern if
+  Alpine support is needed.
+- Building on any other platform (or with `CGO_ENABLED=0`) still compiles:
+  see [Build tags and the stub](#build-tags-and-the-stub).
+
+## API
+
+```go
+// Convert a document file to Markdown. The format is detected from the
+// content; the extension is the fallback for signature-less formats (CSV).
+func ToMarkdown(path string) (string, error)
+
+// Convert an in-memory document to Markdown. Pass a Format to select the
+// parser, or nil to detect it from the content.
+func ToMarkdownBytes(data []byte, format *Format) (string, error)
+
+// Convert with embedded images rewritten as ![alt](images/image-N.ext) so
+// they keep their original positions. PDF has no document model and is
+// converted the same way as ToMarkdownBytes.
+func ToMarkdownWithAssetLinks(data []byte, format *Format) (string, error)
+
+// Parse an in-memory document into the document model, which also carries
+// the embedded assets. Unsupported for PDF (no model form) — use
+// ToMarkdownBytes for PDFs.
+func ToDocument(data []byte, format *Format) (*Document, error)
+
+// Format detection.
+func FormatFromBytes(data []byte) (Format, bool)
+func FormatFromExtension(ext string) (Format, bool)
+func FormatFromPath(path string) (Format, bool)
+
+// The bytes of the static archive packaged for this platform, and a helper
+// that writes them to disk. See "Embedding the archive" below.
+func EmbeddedLib() []byte
+func ExtractLib(dir string) (string, error)
+
+// Module version, kept in lockstep with the pinned anydoc crate.
+const Version = "0.2.3"
+```
+
+**Formats** ([format.go](format.go)): `FormatDoc`, `FormatDocx`, `FormatOdt`,
+`FormatPdf`, `FormatPpt`, `FormatPptx`, `FormatRtf`, `FormatEpub`,
+`FormatXlsx`, `FormatOds`, `FormatOdp`, `FormatCsv`.
+
+**Errors** ([errors.go](errors.go)): conversions return `*ConvertError` with a
+`Kind` matching the Node/Python bindings — `unsupported`, `malformed`,
+`encrypted`, `resource_limit`, `missing_part`, `io`, `pdf_no_model` — plus a
+human-readable `Detail`. An invalid explicit `Format` reports
+`unknown_format`.
+
+**Document model** ([model.go](model.go)): `Document` (blocks, notes,
+assets), `Block` (`heading`, `paragraph`, `list`, `table`, `block_quote`,
+`code_block`, `rule`), `Inline` (`text`, `link`, `image`, `anchor`,
+`note_ref`, `line_break`, `math`, `checkbox`), plus `Style`, `LinkTarget`,
+`ImageSource`, `List`, `ListItem`, `Table`, `CellSlot`, `Cell`, `Note`, and
+`Asset` — a full, self-contained representation with embedded asset bytes
+carried in `Asset.Data`.
+
+## How it works
+
+1. **Rust C ABI** — this repository is also a Rust crate
+   ([Cargo.toml](Cargo.toml)) that wraps the published `anydoc` crate
+   (pinned exactly, currently `=0.2.3`) and exposes a small C ABI
+   ([src/lib.rs](src/lib.rs)): `anydoc_to_markdown*`, `anydoc_to_document`,
+   format detection, and matching `_free` functions. A build script
+   re-exports anydoc's crate-private `document_to_markdown` serializer so the
+   official GFM rendering stays available.
+2. **One static archive per platform** — `crate-type = ["staticlib"]` builds
+   `libanydoc_go.a` (~30 MB). The five archives are committed under
+   [lib/](lib/).
+3. **Platform files with build tags** — one Go file per platform
+   ([lib_linux_amd64.go](lib_linux_amd64.go), …) is selected by
+   `//go:build linux && amd64 && cgo` and carries the `#cgo LDFLAGS` pointing
+   at its archive:
+   `-L${SRCDIR}/lib/linux_amd64 -lanydoc_go -lm -lstdc++ -ldl -lpthread`.
+4. **`//go:embed`** — each platform file embeds its archive
+   (`//go:embed lib/linux_amd64/libanydoc_go.a`). The directive makes the
+   archive a *declared dependency of the package*, so `go mod vendor`, module
+   zips, and `go list` can never silently drop it. The bytes are exposed by
+   `EmbeddedLib()`/`ExtractLib()`; binaries that never call them pay nothing —
+   the linker eliminates the unreferenced ~30 MB.
+5. **A user-friendly API** — [anydoc.go](anydoc.go) hides every pointer and
+   free call behind plain Go functions, pins the goroutine during ABI calls
+   (the error slot is thread-local), and bounds-decodes the document buffer
+   into Go structs.
+
+## Build tags and the stub
+
+| Build | Files compiled | Behavior |
+| --- | --- | --- |
+| cgo, supported platform | platform file + [anydoc.go](anydoc.go) | links the archive, full functionality |
+| `CGO_ENABLED=0` or unsupported platform | [anydoc_stub.go](anydoc_stub.go) | compiles; every function returns a helpful `UnavailableError` |
+
+```go
+md, err := anydoc.ToMarkdownBytes(data, nil)
+if err != nil && anydoc.IsUnavailable(err) {
+	// fall back to another converter or tell the operator why
+	log.Printf("anydoc unavailable: %v", err)
+}
+```
+
+The stub keeps the module importable everywhere — builds never fail because
+of this package; they fail fast at run time with an explanation.
+
+## Vendoring
+
+`go mod vendor` copies the archives and the C header: the `//go:embed`
+directives declare them as package dependencies, so vendored builds keep
+working with `-mod=vendor` — the `#cgo LDFLAGS` paths are `${SRCDIR}`-relative
+and resolve inside the vendor tree. Run `go mod vendor` with the default
+cgo-enabled environment: it captures all five `lib/<platform>/` trees (for
+every platform, not just the host). Vendoring with `CGO_ENABLED=0` captures
+only the header — which is all a stub build needs.
+
+Mind the module size: the five archives total ~150 MB, so a `go get` pulls a
+large module zip (well under proxy limits, but worth knowing). If your
+registry or bandwidth makes that uncomfortable, vendoring once is the usual
+answer.
+
+## Building the archives from source
+
+You only need this to upgrade anydoc, change the C ABI, or support a new
+platform. Users of the module never do.
+
+Requirements: Rust (rustup, any recent stable — anydoc 0.2.3 needs ≥ 1.88),
+plus one cross toolchain: `cross` (with Docker) or `cargo-zigbuild`
+(bundles zig, no Docker).
+
+```bash
+# Everything the current platform can build.
+./scripts/build-all.sh
+
+# A subset, by lib directory name.
+./scripts/build-all.sh linux_amd64 darwin_arm64
+
+# One target directly, choosing the driver:
+TARGET=aarch64-unknown-linux-gnu BUILD_TOOL=cross ./scripts/build-anydoc-lib.sh
+TARGET=x86_64-pc-windows-gnu BUILD_TOOL=zigbuild ./scripts/build-anydoc-lib.sh
+```
+
+[scripts/build-all.sh](scripts/build-all.sh) prefers `cross`, falls back to
+`cargo-zigbuild`, then plain cargo. macOS archives build natively on a Mac
+(Apple's SDK cannot be redistributed, so Linux hosts cannot build them — CI
+uses macOS runners). The scripts pin the exact `anydoc` version, refuse to
+build when [version.go](version.go) disagrees with the Cargo.toml pin, and
+build with `--locked` once [Cargo.lock](Cargo.lock) exists.
+
+### Rebuilding in CI
+
+The **Build static libraries** workflow
+([.github/workflows/build-libs.yml](.github/workflows/build-libs.yml)) builds
+all five archives, smoke-tests them by linking and converting through the Go
+package, then commits and pushes them to the main branch:
+
+**Actions → “Build static libraries” → Run workflow.**
+
+Run it after changing the `anydoc = "=X.Y.Z"` pin, upgrading tooling, or
+whenever the committed archives are stale. A separate **CI** workflow runs
+gofmt, the version-pin agreement check, stub-mode tests, and — once archives
+exist — the full cgo test suite on every push and pull request.
+
+## Wasm vs. this binding
+
+anydoc also ships official [WebAssembly bindings](https://github.com/firecrawl/anydoc/tree/main/wasm)
+(`@firecrawl/anydoc-wasm`). This static-library binding exists because a
+Go-native server gains nothing from the wasm runtime.
+
+**Advantages over wasm**
+
+- **No Rust or wasm toolchain for users.** Prebuilt archives arrive through
+  `go get`; wasm in Go requires [wazero](https://github.com/tetratelabs/wazero)
+  or similar, plus a build step to produce the `.wasm`.
+- **Native speed.** The conversion runs as machine code in-process, with no
+  wasm interpretation or JIT warm-up (typically 1.5–3× faster in practice).
+- **Full filesystem API.** `ToMarkdown(path)` exists only here — wasm has no
+  filesystem.
+- **Concurrency.** Native threads and Go's scheduler; wasm modules run
+  single-threaded on the calling thread, so busy servers must shuttle
+  conversions to workers.
+- **One less dependency.** The archive is linked into the binary; no runtime
+  library to keep in lockstep with the Go module.
+
+**Disadvantages vs. wasm**
+
+- **cgo required.** Breaks `CGO_ENABLED=0` builds and needs a C toolchain per
+  platform; some PaaS/buildpack setups and static-analysis tooling dislike
+  cgo.
+- **Per-platform archives.** Five files × ~30 MB in the module; wasm is a
+  single portable artifact. The linked binary grows by the archive too.
+- **Cross-compiling is more work.** One host cannot produce every archive
+  without `cross`/zig (macOS targets need a Mac); wasm builds anywhere from
+  anywhere.
+- **No browser or edge use.** wasm runs in the browser and on serverless
+  edge platforms; a native archive cannot.
+- **Libc coupling.** The linux archive targets glibc; wasm is libc-agnostic.
+
+**Rule of thumb:** in a Go service that converts documents server-side, use
+this module. For browser/edge tooling, small CLI one-offs, or pure-Go
+deployment pipelines, the wasm binding fits better.
+
+## Security notes
+
+anydoc parses untrusted, hostile input in your process:
+
+- The Rust ABI catches panics and reports them as `malformed` errors rather
+  than aborting the process ([src/lib.rs](src/lib.rs), `guarded`). This
+  cannot contain stack overflows or allocation failures.
+- The pinned anydoc version includes the pdf-inspector fixes that bound
+  previously unbounded PDF parsing (see the anydoc changelog) — upgrade the
+  pin with `--locked` rebuilds rather than ad-hoc versions.
+- Sandbox or resource-limit processes that convert untrusted uploads, as you
+  would for any native parser.
+
+## License
+
+MIT. This module links the `anydoc` crate, MIT © Sideguide Technologies Inc.
+See [LICENSE](LICENSE).
+
+## Acknowledgments
+
+The binding architecture follows the upstream Go bindings
+([firecrawl/anydoc#30](https://github.com/firecrawl/anydoc/pull/30)) and the
+hardened version vendored by [WeKnora](https://github.com/Tencent/WeKnora)
+(`third_party/anydoc-go`), including the cgo thread-pinning, the panic guard,
+the flat document-model serialization, and the build script's crate-patching
+approach.

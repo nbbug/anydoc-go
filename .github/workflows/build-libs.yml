@@ -1,0 +1,140 @@
+name: Build static libraries
+
+# Builds the anydoc static archives for every supported platform and pushes
+# them to the main branch. Trigger it manually (Actions → "Build static
+# libraries" → Run workflow) after changing the `anydoc = "=X.Y.Z"` pin in
+# Cargo.toml, after upgrading Rust tooling, or whenever the committed archives
+# fall out of date. The archives are ~30 MB each, so they are built on demand
+# rather than on every push.
+
+on:
+  workflow_dispatch:
+    inputs:
+      branch:
+        description: "Branch to commit the archives to"
+        required: false
+        default: "main"
+
+permissions:
+  contents: write
+
+jobs:
+  # Linux (glibc) and Windows archives. Linux/amd64 builds natively; Linux/arm64
+  # and Windows use cross. Windows deliberately targets x86_64-pc-windows-gnu:
+  # Go's cgo links with mingw gcc, which reads GNU archives (an MSVC .lib also
+  # cannot be produced by cross).
+  build-linux-windows:
+    name: Build (${{ matrix.target }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            tool: cargo
+          - target: aarch64-unknown-linux-gnu
+            tool: cross
+          - target: x86_64-pc-windows-gnu
+            tool: cross
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: anydoc-go-${{ matrix.target }}
+      - uses: taiki-e/install-action@v2
+        if: matrix.tool == 'cross'
+        with:
+          tool: cross
+      - name: Build archive
+        run: BUILD_TOOL=${{ matrix.tool }} TARGET=${{ matrix.target }} ./scripts/build-anydoc-lib.sh
+      - name: Stage archive
+        run: |
+          mkdir -p staging
+          cp -R lib staging/
+          # cbindgen regenerates include/anydoc.h during the build; the
+          # regenerated header is committed alongside the archives so the
+          # committed copy can never drift from the Rust source. Same for
+          # Cargo.lock on the first run.
+          cp include/anydoc.h staging/anydoc.h
+          cp Cargo.lock staging/Cargo.lock 2>/dev/null || true
+      - uses: actions/upload-artifact@v4
+        with:
+          name: archives-${{ matrix.target }}
+          path: staging
+          if-no-files-found: error
+
+  # macOS archives. Both architectures build on the arm64 runner: aarch64
+  # natively, x86_64 through the universal Xcode toolchain (the crate tree is
+  # pure Rust, so no C toolchain is needed). Apple's SDK cannot be
+  # redistributed, so these cannot be built from Linux with cross.
+  build-darwin:
+    name: Build darwin (${{ matrix.target }})
+    runs-on: macos-14
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [aarch64-apple-darwin, x86_64-apple-darwin]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: anydoc-go-${{ matrix.target }}
+      - name: Build archive
+        run: TARGET=${{ matrix.target }} ./scripts/build-anydoc-lib.sh
+      - name: Stage archive
+        run: |
+          mkdir -p staging
+          cp -R lib staging/
+          cp include/anydoc.h staging/anydoc.h
+          cp Cargo.lock staging/Cargo.lock 2>/dev/null || true
+      - uses: actions/upload-artifact@v4
+        with:
+          name: archives-${{ matrix.target }}
+          path: staging
+          if-no-files-found: error
+
+  # Smoke-test the fresh archives by linking the Go package against them
+  # before they land on main: a broken archive must fail the workflow, not
+  # reach users.
+  push:
+    name: Commit and push archives
+    needs: [build-linux-windows, build-darwin]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.branch }}
+      - name: Download archives
+        uses: actions/download-artifact@v4
+        with:
+          pattern: archives-*
+          path: staging
+          merge-multiple: true
+      - name: Stage into repository
+        run: |
+          cp -R staging/lib/. lib/
+          cp -f staging/anydoc.h include/anydoc.h
+          cp -f staging/Cargo.lock Cargo.lock
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.22.x"
+      - name: Smoke test (link + convert)
+        run: |
+          go build ./...
+          go test -run 'TestToMarkdownBytesCSV|TestToDocumentDocx|TestEmbeddedLibAndExtract|TestWireConstsMatchHeader' .
+      - name: Commit and push
+        run: |
+          version=$(sed -n 's/^anydoc = "=\([^"]*\)".*/\1/p' Cargo.toml | head -1)
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          if git diff --quiet && git diff --cached --quiet; then
+            echo "No changes; the committed archives are already current."
+            exit 0
+          fi
+          git add lib include/anydoc.h Cargo.lock
+          git commit -m "chore: rebuild anydoc static libraries (anydoc v${version})"
+          git push origin "HEAD:${{ github.event.inputs.branch }}"

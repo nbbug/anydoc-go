@@ -1,0 +1,68 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  go:
+    name: Go tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.22.x"
+
+      - name: gofmt check
+        run: |
+          files=$(gofmt -l .)
+          if [ -n "$files" ]; then
+            echo "gofmt needed on:"; echo "$files"
+            exit 1
+          fi
+
+      - name: Version pin agreement (Cargo.toml ↔ version.go)
+        run: |
+          cargo_version=$(sed -n 's/^anydoc = "=\([^"]*\)".*/\1/p' Cargo.toml | head -1)
+          go_version=$(sed -n 's/^const Version = "\([^"]*\)".*/\1/p' version.go | head -1)
+          if [ "$cargo_version" != "$go_version" ]; then
+            echo "error: Cargo.toml pins anydoc $cargo_version but version.go says $go_version" >&2
+            exit 1
+          fi
+          echo "anydoc pin: $cargo_version"
+
+      # Stub builds: the package must compile and fail gracefully everywhere,
+      # with cgo disabled and without any archives.
+      - name: Test without cgo (stub path)
+        run: |
+          CGO_ENABLED=0 go vet ./...
+          CGO_ENABLED=0 go test ./...
+
+      # Full cgo tests link the packaged archive. Skip until the archives have
+      # been pushed to main by the "Build static libraries" workflow — before
+      # the first run, lib/ is empty and go:embed cannot resolve.
+      - name: Test with cgo (linux/amd64 archive)
+        run: |
+          if [ ! -f lib/linux_amd64/libanydoc_go.a ]; then
+            echo "skip: lib/linux_amd64/libanydoc_go.a missing; run the 'Build static libraries' workflow first"
+            exit 0
+          fi
+          go vet ./...
+          go test ./...
+          go build ./examples/convert ./examples/parse
+
+  rust:
+    name: Rust build (check)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: anydoc-go-check
+      # Compile-check the binding crate for the host target. The full
+      # multi-platform archives are built by the "Build static libraries"
+      # workflow; this catches source-level breakage on every push.
+      - run: ./scripts/build-anydoc-lib.sh
