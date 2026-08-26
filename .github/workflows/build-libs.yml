@@ -37,7 +37,7 @@ jobs:
           - target: aarch64-unknown-linux-gnu
             tool: cross
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
         with:
@@ -72,7 +72,7 @@ jobs:
     name: Build windows (x86_64-pc-windows-msvc)
     runs-on: windows-2025
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
         with:
@@ -105,7 +105,7 @@ jobs:
       matrix:
         target: [aarch64-apple-darwin, x86_64-apple-darwin]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
@@ -134,7 +134,7 @@ jobs:
     needs: [build-linux, build-windows, build-darwin]
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           ref: ${{ github.event.inputs.branch }}
       - name: Download archives
@@ -148,13 +148,20 @@ jobs:
           cp -R staging/lib/. lib/
           cp -f staging/anydoc.h include/anydoc.h
           cp -f staging/Cargo.lock Cargo.lock
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v6
         with:
-          go-version: "1.22.x"
+          go-version: "1.27.x"
       - name: Smoke test (link + convert)
         run: |
           go build ./...
           go test -run 'TestToMarkdownBytesCSV|TestToDocumentDocx|TestEmbeddedLibAndExtract|TestWireConstsMatchHeader' .
+      # No explicit token is configured here: actions/checkout above injects
+      # the workflow's GITHUB_TOKEN into the git config (persist-credentials
+      # defaults to true), and the workflow-level `permissions:
+      # contents: write` grants it push rights. Caveats: branch protection on
+      # the target branch rejects the push, and pushes made with GITHUB_TOKEN
+      # deliberately do not trigger other workflows (the archives commit does
+      # not re-run ci.yml).
       - name: Commit and push
         run: |
           version=$(sed -n 's/^anydoc = "=\([^"]*\)".*/\1/p' Cargo.toml | head -1)
