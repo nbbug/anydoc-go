@@ -40,7 +40,10 @@ func zipFixture(t *testing.T, entries map[string]string) []byte {
 }
 
 // docxFixture is a minimal WordprocessingML package: one Heading1 paragraph
-// and one body paragraph.
+// and one body paragraph. Heading detection needs word/styles.xml — anydoc
+// resolves a paragraph's pStyle against the style *name* ("heading 1"),
+// and falls back to the conventional part path when the package has no
+// document relationships part.
 func docxFixture(t *testing.T) []byte {
 	t.Helper()
 	return zipFixture(t, map[string]string{
@@ -49,6 +52,7 @@ func docxFixture(t *testing.T) []byte {
 <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
 <Default Extension="xml" ContentType="application/xml"/>
 <Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>
+<Override PartName="/word/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml"/>
 </Types>`,
 		"_rels/.rels": `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
@@ -61,6 +65,10 @@ func docxFixture(t *testing.T) []byte {
 <w:p><w:r><w:t>Hello world</w:t></w:r></w:p>
 </w:body>
 </w:document>`,
+		"word/styles.xml": `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+<w:style w:type="paragraph" w:styleId="Heading1"><w:name w:val="heading 1"/></w:style>
+</w:styles>`,
 	})
 }
 
