@@ -1,0 +1,8 @@
+# Normalize text files to LF everywhere, so the Windows CI runner never
+# checks out CRLF sources (which would break the grep/sed patterns in
+# scripts/build-anydoc-lib.sh).
+* text=auto eol=lf
+
+# Prebuilt archives are binary; never subject them to EOL conversion.
+*.a binary
+*.lib binary

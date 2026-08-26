@@ -11,3 +11,5 @@ import _ "embed"
 
 //go:embed lib/darwin_amd64/libanydoc_go.a
 var embeddedLib []byte
+
+var embeddedLibName = "libanydoc_go.a"

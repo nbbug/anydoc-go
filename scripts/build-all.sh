@@ -7,14 +7,17 @@
 #   linux/arm64    aarch64-unknown-linux-gnu
 #   darwin/amd64   x86_64-apple-darwin
 #   darwin/arm64   aarch64-apple-darwin
-#   windows/amd64  x86_64-pc-windows-gnu
+#   windows/amd64  x86_64-pc-windows-msvc
 #
 # Tool selection:
 #   - macOS targets always build with plain cargo on a macOS host: Apple's SDK
 #     cannot be redistributed, so neither cross nor zig can target them from
 #     Linux. On non-macOS hosts they are skipped with a warning; the CI
 #     workflow builds them on macOS runners.
-#   - Linux/Windows targets prefer `cross` (Docker) when available, then
+#   - The Windows target uses the MSVC toolchain, which likewise cannot be
+#     redistributed: it builds with plain cargo on a native Windows host only
+#     (the CI workflow uses a Windows runner). Skipped elsewhere.
+#   - Linux targets prefer `cross` (Docker) when available, then
 #     `cargo-zigbuild`, then plain cargo (which needs the rustup target and a
 #     cross linker installed).
 #
@@ -31,17 +34,19 @@ if ! command -v cargo >/dev/null 2>&1; then
   exit 1
 fi
 
-linux_windows_targets=(
+linux_targets=(
   x86_64-unknown-linux-gnu
   aarch64-unknown-linux-gnu
-  x86_64-pc-windows-gnu
 )
 darwin_targets=(
   x86_64-apple-darwin
   aarch64-apple-darwin
 )
+windows_targets=(
+  x86_64-pc-windows-msvc
+)
 
-# Pick the cross toolchain for the Linux/Windows targets.
+# Pick the cross toolchain for the Linux targets.
 if command -v cross >/dev/null 2>&1 && command -v docker >/dev/null 2>&1; then
   tool=cross
 elif command -v cargo-zigbuild >/dev/null 2>&1; then
@@ -51,13 +56,13 @@ else
   echo "note: plain cargo needs the rustup target and a cross linker per target." >&2
   tool=cargo
 fi
-echo "Using '$tool' for Linux/Windows targets."
+echo "Using '$tool' for Linux targets."
 
-for target in "${linux_windows_targets[@]}" "${darwin_targets[@]}"; do
+for target in "${linux_targets[@]}" "${darwin_targets[@]}" "${windows_targets[@]}"; do
   case "$target" in
     x86_64-apple-darwin) dir=darwin_amd64 ;;
     aarch64-apple-darwin) dir=darwin_arm64 ;;
-    x86_64-pc-windows-gnu) dir=windows_amd64 ;;
+    x86_64-pc-windows-msvc) dir=windows_amd64 ;;
     x86_64-unknown-linux-gnu) dir=linux_amd64 ;;
     aarch64-unknown-linux-gnu) dir=linux_arm64 ;;
   esac
@@ -79,6 +84,13 @@ for target in "${linux_windows_targets[@]}" "${darwin_targets[@]}"; do
       fi
       BUILD_TOOL=cargo TARGET="$target" "$repo_root/scripts/build-anydoc-lib.sh"
       ;;
+    *windows-msvc)
+      if [ "$(uname -s)" != "MINGW64_NT"* ] && [ "$(uname -s)" != "MSYS_NT"* ] && [ "$(uname -s)" != "CYGWIN_NT"* ] && [ "$(uname -s)" != "Windows" ]; then
+        echo "skip  $dir ($target): the MSVC toolchain only builds on a native Windows host; CI uses a Windows runner"
+        continue
+      fi
+      BUILD_TOOL=cargo TARGET="$target" "$repo_root/scripts/build-anydoc-lib.sh"
+      ;;
     *)
       BUILD_TOOL="$tool" TARGET="$target" "$repo_root/scripts/build-anydoc-lib.sh"
       ;;
@@ -86,4 +98,4 @@ for target in "${linux_windows_targets[@]}" "${darwin_targets[@]}"; do
 done
 
 echo "Done. Archives under lib/:"
-ls -lh lib/*/libanydoc_go.a 2>/dev/null || true
+ls -lh lib/*/libanydoc_go.a lib/*/anydoc_go.lib 2>/dev/null || true

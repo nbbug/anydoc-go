@@ -11,7 +11,7 @@ import (
 	"fmt"
 	"os"
 
-	anydoc "github.com/your-org/anydoc-go"
+	anydoc "github.com/nbbug/anydoc-go"
 )
 
 func main() {

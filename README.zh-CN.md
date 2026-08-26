@@ -12,22 +12,18 @@ anydoc-go 通过 cgo 以**静态库**的方式链接 anydoc，并在模块内为
 
 ## 环境要求
 
-| | |
-| --- | --- |
-| Go | ≥ 1.22 |
-| CGO | `CGO_ENABLED=1`（所有支持平台上的 Go 默认值） |
+|          |                                                                                 |
+| -------- | ------------------------------------------------------------------------------- |
+| Go       | ≥ 1.22                                                                          |
+| CGO      | `CGO_ENABLED=1`（所有支持平台上的 Go 默认值）                                   |
 | C 工具链 | 各系统标准配置 —— macOS 用 Xcode 命令行工具、Linux 用 gcc、Windows 用 mingw-w64 |
-| Rust | 使用本模块**不需要**；只有重新编译静态库时才需要 |
+| Rust     | 使用本模块**不需要**；只有重新编译静态库时才需要                                |
 
 ## 安装
 
 ```
-go get github.com/your-org/anydoc-go
+go get github.com/nbbug/anydoc-go
 ```
-
-> **发布前请改名：**[go.mod](go.mod) 中的模块路径目前是占位符。创建 GitHub
-> 仓库后，需要修改 `go.mod` 中的一行、[examples/](examples/) 下的两处
-> `import`，以及本 README 中的导入路径。
 
 ## 快速上手
 
@@ -38,7 +34,7 @@ import (
 	"fmt"
 	"os"
 
-	anydoc "github.com/your-org/anydoc-go"
+	anydoc "github.com/nbbug/anydoc-go"
 )
 
 func main() {
@@ -70,23 +66,25 @@ go run ./examples/parse   -file report.docx
 ## 支持的平台
 
 模块为以下每个组合打包了预编译静态库，Go 编译器通过构建标签（build tags）
-自动选择正确的文件。每个静态库都是一个名为 `libanydoc_go.a` 的文件，位于
-`lib/<platform>/` 目录下。
+自动选择正确的文件。每个静态库都是 `lib/<platform>/` 目录下的一个文件：
+除 Windows 外均为 `libanydoc_go.a`，Windows 为 MSVC 的 COFF 归档
+`anydoc_go.lib`。
 
-| 平台 | Rust 目标 | 链接所用的 C 工具链 |
-| --- | --- | --- |
-| linux/amd64 | `x86_64-unknown-linux-gnu` | gcc |
-| linux/arm64 | `aarch64-unknown-linux-gnu` | gcc (aarch64) |
-| darwin/amd64 | `x86_64-apple-darwin` | clang（Xcode 命令行工具） |
-| darwin/arm64 | `aarch64-apple-darwin` | clang（Xcode 命令行工具） |
-| windows/amd64 | `x86_64-pc-windows-gnu` | mingw-w64 gcc |
+| 平台          | Rust 目标                   | 链接所用的 C 工具链       |
+| ------------- | --------------------------- | ------------------------- |
+| linux/amd64   | `x86_64-unknown-linux-gnu`  | gcc                       |
+| linux/arm64   | `aarch64-unknown-linux-gnu` | gcc (aarch64)             |
+| darwin/amd64  | `x86_64-apple-darwin`       | clang（Xcode 命令行工具） |
+| darwin/arm64  | `aarch64-apple-darwin`      | clang（Xcode 命令行工具） |
+| windows/amd64 | `x86_64-pc-windows-msvc`    | mingw-w64 gcc             |
 
 说明：
 
-- **Windows 使用 GNU 目标。**Go 的 cgo 使用 mingw gcc 链接，它读取的是 GNU
-  归档文件；MSVC 的 `.lib` 不仅链接麻烦，也无法用 `cross` 构建。如果确实
-  需要 MSVC，请在 Windows 运行器上用原生工具链构建，并添加一个
-  `lib_windows_amd64_msvc.go` 变体文件。
+- **Windows 使用 MSVC 目标**，与 WeKnora 绑定一致。静态库由 MSVC 工具链
+  构建（MSVC 不可再分发，因此只能在原生 Windows 主机或 CI 的 Windows
+  运行器上构建），产物为 `anydoc_go.lib`。Go 的 cgo 仍然使用 mingw gcc
+  链接 —— GNU ld 可以读取 MSVC 的 `.lib` 归档 —— 因此使用者只需要标准的
+  mingw-w64 工具链，不需要安装 Visual Studio。
 - **Linux 为 glibc。**Alpine/musl 用户需要自行重新编译静态库（在 Alpine
   镜像内执行 `./scripts/build-all.sh linux_amd64`，或使用
   `cargo-zigbuild` 后提交产物）。Go 的构建标签无法自动识别 musl，参考项目
@@ -170,10 +168,10 @@ const Version = "0.2.3"
 
 ## 构建标签与兜底实现
 
-| 构建方式 | 参与编译的文件 | 行为 |
-| --- | --- | --- |
-| cgo + 受支持平台 | 平台文件 + [anydoc.go](anydoc.go) | 链接静态库，功能完整 |
-| `CGO_ENABLED=0` 或不受支持的平台 | [anydoc_stub.go](anydoc_stub.go) | 可编译；所有函数返回提示明确的 `UnavailableError` |
+| 构建方式                         | 参与编译的文件                    | 行为                                              |
+| -------------------------------- | --------------------------------- | ------------------------------------------------- |
+| cgo + 受支持平台                 | 平台文件 + [anydoc.go](anydoc.go) | 链接静态库，功能完整                              |
+| `CGO_ENABLED=0` 或不受支持的平台 | [anydoc_stub.go](anydoc_stub.go)  | 可编译；所有函数返回提示明确的 `UnavailableError` |
 
 ```go
 md, err := anydoc.ToMarkdownBytes(data, nil)
@@ -216,15 +214,16 @@ cgo 开启环境下执行 `go mod vendor`：它会捕获全部五个 `lib/<platf
 
 # 直接构建单个目标并指定驱动：
 TARGET=aarch64-unknown-linux-gnu BUILD_TOOL=cross ./scripts/build-anydoc-lib.sh
-TARGET=x86_64-pc-windows-gnu BUILD_TOOL=zigbuild ./scripts/build-anydoc-lib.sh
+TARGET=x86_64-pc-windows-msvc ./scripts/build-anydoc-lib.sh   # 仅限 Windows 主机
 ```
 
 [scripts/build-all.sh](scripts/build-all.sh) 优先使用 `cross`，其次回退到
 `cargo-zigbuild`，最后使用原生 cargo。macOS 静态库需在 Mac 上原生构建
-（Apple SDK 不可再分发，Linux 主机无法构建 —— CI 使用 macOS 运行器）。
-脚本会锁定精确的 `anydoc` 版本；当 [version.go](version.go) 与 Cargo.toml
-的锁定版本不一致时拒绝构建；[Cargo.lock](Cargo.lock) 存在时使用
-`--locked` 构建。
+（Apple SDK 不可再分发，Linux 主机无法构建 —— CI 使用 macOS 运行器）；
+Windows 静态库用 MSVC 工具链在原生 Windows 上构建（CI 使用 Windows
+运行器），其他主机上自动跳过。脚本会锁定精确的 `anydoc` 版本；当
+[version.go](version.go) 与 Cargo.toml 的锁定版本不一致时拒绝构建；
+[Cargo.lock](Cargo.lock) 存在时使用 `--locked` 构建。
 
 ### 在 CI 中重新构建
 

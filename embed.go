@@ -31,7 +31,7 @@ func ExtractLib(dir string) (string, error) {
 		return "", &UnavailableError{Reason: fmt.Sprintf(
 			"no embedded static library for %s/%s", runtime.GOOS, runtime.GOARCH)}
 	}
-	name := fmt.Sprintf("libanydoc_go-%s-%s_%s.a", Version, runtime.GOOS, runtime.GOARCH)
+	name := fmt.Sprintf("anydoc-%s-%s_%s-%s", Version, runtime.GOOS, runtime.GOARCH, embeddedLibName)
 	path := filepath.Join(dir, name)
 	if err := os.WriteFile(path, embeddedLib, 0o644); err != nil {
 		return "", err

@@ -34,20 +34,25 @@ target=${TARGET:-$(rustc -vV | sed -n 's/^host: //p')}
 case "$target" in
   x86_64-apple-darwin) lib_dir=darwin_amd64 ;;
   aarch64-apple-darwin) lib_dir=darwin_arm64 ;;
-  x86_64-pc-windows-gnu) lib_dir=windows_amd64 ;;
+  x86_64-pc-windows-msvc) lib_dir=windows_amd64 ;;
   x86_64-unknown-linux-gnu) lib_dir=linux_amd64 ;;
   aarch64-unknown-linux-gnu) lib_dir=linux_arm64 ;;
   *)
     echo "error: unsupported target '$target'." >&2
-    echo "Supported: {x86_64,aarch64}-apple-darwin, {x86_64,aarch64}-unknown-linux-gnu, x86_64-pc-windows-gnu" >&2
+    echo "Supported: {x86_64,aarch64}-apple-darwin, {x86_64,aarch64}-unknown-linux-gnu, x86_64-pc-windows-msvc" >&2
     exit 1
     ;;
 esac
 
-# Every supported target produces a GNU-ABI archive. Windows deliberately uses
-# the x86_64-pc-windows-gnu target: Go's cgo links with mingw gcc, which reads
-# GNU archives — and unlike an MSVC .lib, this one also builds with cross.
-lib_name=libanydoc_go.a
+# The MSVC target produces a COFF archive named anydoc_go.lib; every other
+# target produces the GNU archive libanydoc_go.a. Windows builds with MSVC
+# (matching the WeKnora binding): the MSVC toolchain cannot be redistributed,
+# so that target only builds on a native Windows host, and Go's cgo links the
+# .lib with mingw gcc.
+case "$target" in
+  x86_64-pc-windows-msvc) lib_name=anydoc_go.lib ;;
+  *) lib_name=libanydoc_go.a ;;
+esac
 
 # The crate version to patch is read from Cargo.toml rather than repeated here,
 # so an upgrade is a one-line change to the `anydoc = "=X.Y.Z"` pin.

@@ -13,23 +13,18 @@ archive and `go build` links it.
 
 ## Requirements
 
-| | |
-| --- | --- |
-| Go | ≥ 1.22 |
-| CGO | `CGO_ENABLED=1` (the Go default on all supported platforms) |
+|             |                                                                                       |
+| ----------- | ------------------------------------------------------------------------------------- |
+| Go          | ≥ 1.22                                                                                |
+| CGO         | `CGO_ENABLED=1` (the Go default on all supported platforms)                           |
 | C toolchain | the standard one for your OS — Xcode CLT on macOS, gcc on Linux, mingw-w64 on Windows |
-| Rust | **not required** to use the module; only to rebuild the archives |
+| Rust        | **not required** to use the module; only to rebuild the archives                      |
 
 ## Install
 
 ```
-go get github.com/your-org/anydoc-go
+go get github.com/nbbug/anydoc-go
 ```
-
-> **Rename before publishing:** the module path in [go.mod](go.mod) is a
-> placeholder. After creating your GitHub repository, change one line in
-> `go.mod`, the two `import` lines under [examples/](examples/), and the
-> import paths in this README.
 
 ## Quickstart
 
@@ -40,7 +35,7 @@ import (
 	"fmt"
 	"os"
 
-	anydoc "github.com/your-org/anydoc-go"
+	anydoc "github.com/nbbug/anydoc-go"
 )
 
 func main() {
@@ -73,24 +68,26 @@ go run ./examples/parse   -file report.docx
 ## Supported platforms
 
 The module packages a prebuilt archive for each combination below; the Go
-compiler selects the right one automatically with build tags. Every archive
-is a single file named `libanydoc_go.a` under `lib/<platform>/`.
+compiler selects the right one automatically with build tags. Each archive is
+a single file under `lib/<platform>/`: `libanydoc_go.a` everywhere except
+Windows, which ships the MSVC COFF archive `anydoc_go.lib`.
 
-| Platform | Rust target | C toolchain used for linking |
-| --- | --- | --- |
-| linux/amd64 | `x86_64-unknown-linux-gnu` | gcc |
-| linux/arm64 | `aarch64-unknown-linux-gnu` | gcc (aarch64) |
-| darwin/amd64 | `x86_64-apple-darwin` | clang (Xcode CLT) |
-| darwin/arm64 | `aarch64-apple-darwin` | clang (Xcode CLT) |
-| windows/amd64 | `x86_64-pc-windows-gnu` | mingw-w64 gcc |
+| Platform      | Rust target                  | C toolchain used for linking |
+| ------------- | ---------------------------- | ---------------------------- |
+| linux/amd64   | `x86_64-unknown-linux-gnu`   | gcc                          |
+| linux/arm64   | `aarch64-unknown-linux-gnu`  | gcc (aarch64)                |
+| darwin/amd64  | `x86_64-apple-darwin`        | clang (Xcode CLT)            |
+| darwin/arm64  | `aarch64-apple-darwin`       | clang (Xcode CLT)            |
+| windows/amd64 | `x86_64-pc-windows-msvc`     | mingw-w64 gcc                |
 
 Notes:
 
-- **Windows uses the GNU target.** Go's cgo links with mingw gcc, which reads
-  GNU archives; an MSVC `.lib` would complicate linking and could not be
-  produced by `cross`. If you need MSVC specifically, build it on a Windows
-  runner with the native toolchain and add a `lib_windows_amd64_msvc.go`
-  variant.
+- **Windows uses the MSVC target**, matching the WeKnora binding. The archive
+  is built with the MSVC toolchain (which cannot be redistributed, so only a
+  native Windows host or the CI Windows runner can build it) and produces
+  `anydoc_go.lib`. Go's cgo still links with mingw gcc — GNU ld reads MSVC
+  `.lib` archives — so users need the standard mingw-w64 toolchain, not
+  Visual Studio.
 - **Linux is glibc.** Alpine/musl users must rebuild the archive
   (`./scripts/build-all.sh linux_amd64` inside an Alpine image or with
   `cargo-zigbuild`, then commit it). musl cannot be auto-detected by Go build
@@ -172,7 +169,7 @@ carried in `Asset.Data`.
    `-L${SRCDIR}/lib/linux_amd64 -lanydoc_go -lm -lstdc++ -ldl -lpthread`.
 4. **`//go:embed`** — each platform file embeds its archive
    (`//go:embed lib/linux_amd64/libanydoc_go.a`). The directive makes the
-   archive a *declared dependency of the package*, so `go mod vendor`, module
+   archive a _declared dependency of the package_, so `go mod vendor`, module
    zips, and `go list` can never silently drop it. The bytes are exposed by
    `EmbeddedLib()`/`ExtractLib()`; binaries that never call them pay nothing —
    the linker eliminates the unreferenced ~30 MB.
@@ -183,10 +180,10 @@ carried in `Asset.Data`.
 
 ## Build tags and the stub
 
-| Build | Files compiled | Behavior |
-| --- | --- | --- |
-| cgo, supported platform | platform file + [anydoc.go](anydoc.go) | links the archive, full functionality |
-| `CGO_ENABLED=0` or unsupported platform | [anydoc_stub.go](anydoc_stub.go) | compiles; every function returns a helpful `UnavailableError` |
+| Build                                   | Files compiled                         | Behavior                                                      |
+| --------------------------------------- | -------------------------------------- | ------------------------------------------------------------- |
+| cgo, supported platform                 | platform file + [anydoc.go](anydoc.go) | links the archive, full functionality                         |
+| `CGO_ENABLED=0` or unsupported platform | [anydoc_stub.go](anydoc_stub.go)       | compiles; every function returns a helpful `UnavailableError` |
 
 ```go
 md, err := anydoc.ToMarkdownBytes(data, nil)
@@ -232,15 +229,17 @@ plus one cross toolchain: `cross` (with Docker) or `cargo-zigbuild`
 
 # One target directly, choosing the driver:
 TARGET=aarch64-unknown-linux-gnu BUILD_TOOL=cross ./scripts/build-anydoc-lib.sh
-TARGET=x86_64-pc-windows-gnu BUILD_TOOL=zigbuild ./scripts/build-anydoc-lib.sh
+TARGET=x86_64-pc-windows-msvc ./scripts/build-anydoc-lib.sh   # on a Windows host only
 ```
 
 [scripts/build-all.sh](scripts/build-all.sh) prefers `cross`, falls back to
 `cargo-zigbuild`, then plain cargo. macOS archives build natively on a Mac
 (Apple's SDK cannot be redistributed, so Linux hosts cannot build them — CI
-uses macOS runners). The scripts pin the exact `anydoc` version, refuse to
-build when [version.go](version.go) disagrees with the Cargo.toml pin, and
-build with `--locked` once [Cargo.lock](Cargo.lock) exists.
+uses macOS runners); the Windows archive builds natively on Windows with the
+MSVC toolchain (CI uses a Windows runner) and is skipped elsewhere. The
+scripts pin the exact `anydoc` version, refuse to build when
+[version.go](version.go) disagrees with the Cargo.toml pin, and build with
+`--locked` once [Cargo.lock](Cargo.lock) exists.
 
 ### Rebuilding in CI
 
