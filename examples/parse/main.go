@@ -56,6 +56,8 @@ func blockSummary(b anydoc.Block) string {
 		return fmt.Sprintf("%dx%d, %s", rows, cols, b.Table.Kind)
 	case "code_block":
 		return fmt.Sprintf("%d bytes", len(*b.Text))
+	case "math":
+		return *b.Math
 	default:
 		return ""
 	}

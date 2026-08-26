@@ -13,6 +13,7 @@ const (
 	blockQuote     = 4
 	blockCode      = 5
 	blockRule      = 6
+	blockMath      = 7
 
 	inlineText      = 0
 	inlineLink      = 1
@@ -66,7 +67,7 @@ type Document struct {
 // which of the optional fields is populated; the rest are nil.
 type Block struct {
 	// Kind is "heading", "paragraph", "list", "table", "block_quote",
-	// "code_block", or "rule".
+	// "code_block", "rule", or "math".
 	Kind    string
 	Level   *uint8   // heading: 1-based outline depth
 	Anchor  *string  // heading: stable anchor id when the document targets it
@@ -76,6 +77,7 @@ type Block struct {
 	Blocks  []Block  // block_quote
 	Lang    *string  // code_block
 	Text    *string  // code_block
+	Math    *string  // math: displayed formula, LaTeX without delimiters
 }
 
 // Inline is one span of inline content. The Kind field selects which optional
@@ -404,6 +406,12 @@ func (d *decoder) block() (Block, error) {
 		return Block{Kind: "code_block", Lang: lang, Text: &text}, nil
 	case blockRule:
 		return Block{Kind: "rule"}, nil
+	case blockMath:
+		text, err := d.str()
+		if err != nil {
+			return Block{}, err
+		}
+		return Block{Kind: "math", Math: &text}, nil
 	default:
 		return Block{}, fmt.Errorf("anydoc: unknown block kind tag %d", tag)
 	}

@@ -369,6 +369,7 @@ func TestWireConstsMatchHeader(t *testing.T) {
 		{"formatCsv", formatCsv, "ANYDOC_FORMAT_CSV"},
 		{"blockHeading", blockHeading, "BLOCK_HEADING"},
 		{"blockRule", blockRule, "BLOCK_RULE"},
+		{"blockMath", blockMath, "BLOCK_MATH"},
 		{"inlineMath", inlineMath, "INLINE_MATH"},
 		{"inlineCheckbox", inlineCheckbox, "INLINE_CHECKBOX"},
 		{"imgUnavailable", imgUnavailable, "IMG_UNAVAILABLE"},

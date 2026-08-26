@@ -137,7 +137,7 @@ const Version = "0.2.3"
 
 **文档模型**（[model.go](model.go)）：`Document`（blocks、notes、assets）、
 `Block`（`heading`、`paragraph`、`list`、`table`、`block_quote`、
-`code_block`、`rule`）、`Inline`（`text`、`link`、`image`、`anchor`、
+`code_block`、`rule`、`math`）、`Inline`（`text`、`link`、`image`、`anchor`、
 `note_ref`、`line_break`、`math`、`checkbox`），以及 `Style`、`LinkTarget`、
 `ImageSource`、`List`、`ListItem`、`Table`、`CellSlot`、`Cell`、`Note`、
 `Asset` —— 完整且自包含的表示，内嵌资源字节存放在 `Asset.Data` 中。

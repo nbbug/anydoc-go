@@ -27,6 +27,7 @@ pub const BLOCK_TABLE: c_int = 3;
 pub const BLOCK_QUOTE: c_int = 4;
 pub const BLOCK_CODE: c_int = 5;
 pub const BLOCK_RULE: c_int = 6;
+pub const BLOCK_MATH: c_int = 7;
 
 pub const INLINE_TEXT: c_int = 0;
 pub const INLINE_LINK: c_int = 1;
@@ -165,6 +166,10 @@ fn write_block(e: &mut Encoder, block: &model::Block) {
         }
         model::Block::Rule => {
             e.i32(BLOCK_RULE);
+        }
+        model::Block::Math(text) => {
+            e.i32(BLOCK_MATH);
+            e.str(text);
         }
     }
 }

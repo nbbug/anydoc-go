@@ -144,7 +144,7 @@ human-readable `Detail`. An invalid explicit `Format` reports
 
 **Document model** ([model.go](model.go)): `Document` (blocks, notes,
 assets), `Block` (`heading`, `paragraph`, `list`, `table`, `block_quote`,
-`code_block`, `rule`), `Inline` (`text`, `link`, `image`, `anchor`,
+`code_block`, `rule`, `math`), `Inline` (`text`, `link`, `image`, `anchor`,
 `note_ref`, `line_break`, `math`, `checkbox`), plus `Style`, `LinkTarget`,
 `ImageSource`, `List`, `ListItem`, `Table`, `CellSlot`, `Cell`, `Note`, and
 `Asset` — a full, self-contained representation with embedded asset bytes

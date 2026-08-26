@@ -104,6 +104,8 @@
 
 #define BLOCK_RULE 6
 
+#define BLOCK_MATH 7
+
 #define INLINE_TEXT 0
 
 #define INLINE_LINK 1
