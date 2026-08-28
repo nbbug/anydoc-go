@@ -82,8 +82,21 @@ prepare_patched_anydoc() {
   if [ -z "$src" ]; then
     local tarball=".anydoc-$anydoc_version.crate"
     echo "Fetching anydoc $anydoc_version to patch document_to_markdown into the public API"
-    if ! curl -fsSL "https://rsproxy.cn/api/v1/crates/anydoc/$anydoc_version/download" -o "$tarball"; then
-      curl -fsSL "https://static.crates.io/crates/anydoc/anydoc-$anydoc_version.crate" -o "$tarball"
+    local rc=0
+    # rsproxy.cn (the China mirror) can be slow or unreachable from GitHub's
+    # Azure runners; static.crates.io is the canonical fallback. Retry
+    # transient failures and report the exit code instead of dying silently.
+    if ! curl --retry 3 --retry-all-errors -fsSL "https://rsproxy.cn/api/v1/crates/anydoc/$anydoc_version/download" -o "$tarball"; then
+      rc=$?
+      if ! curl --retry 3 --retry-all-errors -fsSL "https://static.crates.io/crates/anydoc/anydoc-$anydoc_version.crate" -o "$tarball"; then
+        rc=$?
+        echo "error: failed to download anydoc $anydoc_version from rsproxy.cn and static.crates.io (last curl exit code $rc)" >&2
+        exit 1
+      fi
+    fi
+    if [ ! -s "$tarball" ] || [ "$(wc -c < "$tarball")" -lt 100000 ]; then
+      echo "error: downloaded $tarball is missing or suspiciously small" >&2
+      exit 1
     fi
     local unpack=".anydoc-unpack"
     rm -rf "$unpack"
