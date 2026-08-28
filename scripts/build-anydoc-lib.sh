@@ -192,4 +192,31 @@ if command -v nm >/dev/null 2>&1; then
   fi
 fi
 
+# The archive must end exactly at its last member. A duplicated or appended
+# tail (seen once already: CI artifact-merge corruption) parses as garbage
+# member headers and fails at link time with "archive member invalid control
+# bits"; catch it here instead. Skipped where python3 is unavailable.
+if command -v python3 >/dev/null 2>&1; then
+  python3 - "$dest/$lib_name" <<'PYEOF'
+import sys
+path = sys.argv[1]
+with open(path, "rb") as f:
+    data = f.read()
+if not data.startswith(b"!<arch>\n"):
+    sys.exit(f"error: {path} does not start with an ar magic header")
+pos = 8
+while pos < len(data):
+    if len(data) - pos < 60:
+        sys.exit(f"error: {path} has {len(data) - pos} stray bytes after the last member")
+    size_field = data[pos + 48:pos + 58].rstrip(b" ")
+    try:
+        size = int(size_field)
+    except ValueError:
+        sys.exit(f"error: {path} member header at offset {pos} has a non-numeric size field")
+    pos += 60 + size + (size & 1)  # members are padded to even length
+if pos != len(data):
+    sys.exit(f"error: {path} is {len(data) - pos} bytes longer than its members declare")
+PYEOF
+fi
+
 echo "Wrote $dest/$lib_name"

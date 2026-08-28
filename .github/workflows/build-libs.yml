@@ -34,8 +34,10 @@ jobs:
         include:
           - target: x86_64-unknown-linux-gnu
             tool: cargo
+            dir: linux_amd64
           - target: aarch64-unknown-linux-gnu
             tool: cross
+            dir: linux_arm64
     steps:
       - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
@@ -48,16 +50,24 @@ jobs:
           tool: cross
       - name: Build archive
         run: BUILD_TOOL=${{ matrix.tool }} TARGET=${{ matrix.target }} ./scripts/build-anydoc-lib.sh
+      # Each artifact carries only its own archive: the push job merges all
+      # artifacts into one tree, and download-artifact corrupts files whose
+      # path arrives from more than one artifact (collisions appended or
+      # truncated the merged files). One file per path across all artifacts
+      # keeps the merge lossless.
       - name: Stage archive
         run: |
-          mkdir -p staging
-          cp -R lib staging/
+          mkdir -p staging/lib
+          cp -R "lib/${{ matrix.dir }}" staging/lib/
           # cbindgen regenerates include/anydoc.h during the build; the
           # regenerated header is committed alongside the archives so the
           # committed copy can never drift from the Rust source. Same for
-          # Cargo.lock on the first run.
-          cp include/anydoc.h staging/anydoc.h
-          cp Cargo.lock staging/Cargo.lock 2>/dev/null || true
+          # Cargo.lock on the first run. Only this job carries them: same
+          # single-source rule as the archives.
+          if [ "${{ matrix.dir }}" = linux_amd64 ]; then
+            cp include/anydoc.h staging/anydoc.h
+            cp Cargo.lock staging/Cargo.lock 2>/dev/null || true
+          fi
       - uses: actions/upload-artifact@v4
         with:
           name: archives-${{ matrix.target }}
@@ -83,10 +93,8 @@ jobs:
       - name: Stage archive
         shell: bash
         run: |
-          mkdir -p staging
-          cp -R lib staging/
-          cp include/anydoc.h staging/anydoc.h
-          cp Cargo.lock staging/Cargo.lock 2>/dev/null || true
+          mkdir -p staging/lib
+          cp -R lib/windows_amd64 staging/lib/
       - uses: actions/upload-artifact@v4
         with:
           name: archives-x86_64-pc-windows-msvc
@@ -103,7 +111,11 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        target: [aarch64-apple-darwin, x86_64-apple-darwin]
+        include:
+          - target: aarch64-apple-darwin
+            dir: darwin_arm64
+          - target: x86_64-apple-darwin
+            dir: darwin_amd64
     steps:
       - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
@@ -116,10 +128,8 @@ jobs:
         run: TARGET=${{ matrix.target }} ./scripts/build-anydoc-lib.sh
       - name: Stage archive
         run: |
-          mkdir -p staging
-          cp -R lib staging/
-          cp include/anydoc.h staging/anydoc.h
-          cp Cargo.lock staging/Cargo.lock 2>/dev/null || true
+          mkdir -p staging/lib
+          cp -R "lib/${{ matrix.dir }}" staging/lib/
       - uses: actions/upload-artifact@v4
         with:
           name: archives-${{ matrix.target }}
@@ -148,6 +158,39 @@ jobs:
           cp -R staging/lib/. lib/
           cp -f staging/anydoc.h include/anydoc.h
           cp -f staging/Cargo.lock Cargo.lock
+      # The merged artifacts must be byte-exact: parse every archive's member
+      # headers and require the file to end exactly at its last member. This
+      # is what catches artifact-merge corruption ("archive member invalid
+      # control bits" at link time was the symptom it shipped once).
+      - name: Verify staged archives
+        run: |
+          python3 - <<'PYEOF'
+          import pathlib, sys
+          archives = sorted(pathlib.Path("lib").rglob("*.a")) + sorted(pathlib.Path("lib").rglob("*.lib"))
+          if len(archives) != 5:
+              sys.exit(f"error: expected 5 staged archives, found {len(archives)}: {archives}")
+          for path in archives:
+              data = path.read_bytes()
+              if not data.startswith(b"!<arch>\n"):
+                  sys.exit(f"error: {path} does not start with an ar magic header")
+              members = 0
+              pos = 8
+              while pos < len(data):
+                  if len(data) - pos < 60:
+                      sys.exit(f"error: {path} has {len(data) - pos} stray bytes after the last member")
+                  size_field = data[pos + 48:pos + 58].rstrip(b" ")
+                  try:
+                      size = int(size_field)
+                  except ValueError:
+                      sys.exit(f"error: {path} member header at offset {pos} has a non-numeric size field")
+                  pos += 60 + size + (size & 1)  # members are padded to even length
+                  members += 1
+              if pos != len(data):
+                  sys.exit(f"error: {path} is {len(data) - pos} bytes longer than its members declare")
+              if members < 500:
+                  sys.exit(f"error: {path} has only {members} members; expected a full build (~650+)")
+              print(f"OK: {path} ({members} members, {len(data)} bytes)")
+          PYEOF
       - uses: actions/setup-go@v6
         with:
           go-version: "1.27.x"
