@@ -20,6 +20,11 @@
 #            bundles zig, needs no Docker and no per-target toolchains
 set -euo pipefail
 
+# Black box: when set -e kills the script on a failing command, report the
+# line and exit code. The Windows runner has failed here silently (exit 101,
+# no message) twice; this pinpoints the exact command next time.
+trap 'echo "error: build-anydoc-lib.sh failed at line $LINENO (exit code $?)" >&2' ERR
+
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 cd "$repo_root"
 
@@ -86,22 +91,27 @@ prepare_patched_anydoc() {
     # rsproxy.cn (the China mirror) can be slow or unreachable from GitHub's
     # Azure runners; static.crates.io is the canonical fallback. Retry
     # transient failures and report the exit code instead of dying silently.
+    echo "Downloading from rsproxy.cn"
     if ! curl --retry 3 --retry-all-errors -fsSL "https://rsproxy.cn/api/v1/crates/anydoc/$anydoc_version/download" -o "$tarball"; then
       rc=$?
+      echo "Downloading from static.crates.io (rsproxy.cn failed with $rc)"
       if ! curl --retry 3 --retry-all-errors -fsSL "https://static.crates.io/crates/anydoc/anydoc-$anydoc_version.crate" -o "$tarball"; then
         rc=$?
         echo "error: failed to download anydoc $anydoc_version from rsproxy.cn and static.crates.io (last curl exit code $rc)" >&2
         exit 1
       fi
     fi
+    echo "Downloaded $(wc -c < "$tarball") bytes"
     if [ ! -s "$tarball" ] || [ "$(wc -c < "$tarball")" -lt 100000 ]; then
       echo "error: downloaded $tarball is missing or suspiciously small" >&2
       exit 1
     fi
     local unpack=".anydoc-unpack"
+    echo "Unpacking $tarball"
     rm -rf "$unpack"
     mkdir -p "$unpack"
     tar -xzf "$tarball" -C "$unpack"
+    echo "Unpacked; patching document_to_markdown"
     src=$(find "$unpack" -maxdepth 1 -type d -name "anydoc-$anydoc_version" | head -1)
     if [ -z "$src" ]; then
       echo "error: unpacked anydoc-$anydoc_version crate is missing" >&2
