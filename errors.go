@@ -31,7 +31,8 @@ type ConvertError struct {
 	// Kind is the lowercase variant name, matching the Node and Python
 	// bindings: "unsupported", "malformed", "encrypted", "resource_limit",
 	// "missing_part", "io", "pdf_no_model", "needs_ocr". Go also reports
-	// "unknown_format" for an invalid explicit Format.
+	// "unknown_format" for an invalid explicit Format and "hosted" when the
+	// Firecrawl Parse OCR fallback fails.
 	Kind string
 	// Detail is the crate's Display output for the error, e.g.
 	// "pages 2, 5-7 of 12 need OCR".

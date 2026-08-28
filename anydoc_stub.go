@@ -18,6 +18,18 @@ func ToMarkdownBytes(data []byte, format *Format) (string, error) {
 	return "", unavailableError(unavailableDetail)
 }
 
+// ToMarkdownWithOptions converts a document file to Markdown with extended
+// behavior; see the cgo implementation.
+func ToMarkdownWithOptions(path string, opts *Options) (string, error) {
+	return "", unavailableError(unavailableDetail)
+}
+
+// ToMarkdownBytesWithOptions converts an in-memory document to Markdown with
+// extended behavior; see the cgo implementation.
+func ToMarkdownBytesWithOptions(data []byte, format *Format, opts *Options) (string, error) {
+	return "", unavailableError(unavailableDetail)
+}
+
 // ToMarkdownWithAssetLinks converts an in-memory document to Markdown with
 // embedded images rewritten as `![alt](images/image-N.ext)`.
 func ToMarkdownWithAssetLinks(data []byte, format *Format) (string, error) {

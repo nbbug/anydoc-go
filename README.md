@@ -108,6 +108,16 @@ func ToMarkdown(path string) (string, error)
 // parser, or nil to detect it from the content.
 func ToMarkdownBytes(data []byte, format *Format) (string, error)
 
+// Convert with extended behavior. A nil Options behaves like ToMarkdown /
+// ToMarkdownBytes; with Ocr = OcrHosted, a PDF whose pages need OCR is sent
+// to Firecrawl Parse instead of failing with needs_ocr.
+func ToMarkdownWithOptions(path string, opts *Options) (string, error)
+func ToMarkdownBytesWithOptions(data []byte, format *Format, opts *Options) (string, error)
+
+// Options: Ocr (OcrReject, the default / OcrHosted), APIKey (falls back to
+// FIRECRAWL_API_KEY, then keyless), APIURL (falls back to FIRECRAWL_API_URL,
+// then https://api.firecrawl.dev).
+
 // Convert with embedded images rewritten as ![alt](images/image-N.ext) so
 // they keep their original positions. PDF has no document model and is
 // converted the same way as ToMarkdownBytes.
@@ -143,7 +153,8 @@ const Version = "0.2.4"
 a PDF are scanned or image-only (since anydoc 0.2.4 they fail the conversion
 naming the pages instead of being silently dropped) and also carries the
 structured `NeedsOcr{Pages, PageCount}` fields. An invalid explicit `Format`
-reports `unknown_format`.
+reports `unknown_format`, and a failed Firecrawl Parse fallback reports
+`hosted`.
 
 **Document model** ([model.go](model.go)): `Document` (blocks, notes,
 assets), `Block` (`heading`, `paragraph`, `list`, `table`, `block_quote`,
@@ -152,6 +163,25 @@ assets), `Block` (`heading`, `paragraph`, `list`, `table`, `block_quote`,
 `ImageSource`, `List`, `ListItem`, `Table`, `CellSlot`, `Cell`, `Note`, and
 `Asset` — a full, self-contained representation with embedded asset bytes
 carried in `Asset.Data`.
+
+### Hosted OCR (opt-in)
+
+For a PDF whose pages are scanned or image-only, anydoc fails with
+`needs_ocr` naming the pages. The opt-in `OcrHosted` mode instead sends the
+whole document to [Firecrawl Parse](https://firecrawl.dev/parse), which
+extracts the text:
+
+```go
+md, err := anydoc.ToMarkdownBytesWithOptions(pdf, &anydoc.FormatPdf, &anydoc.Options{
+	Ocr: anydoc.OcrHosted,
+})
+```
+
+It works keyless; set `FIRECRAWL_API_KEY` (or `Options.APIKey`) to raise the
+rate limits, and `FIRECRAWL_API_URL`/`Options.APIURL` to point at a different
+endpoint. Failures report kind `hosted`. Only documents anydoc cannot convert
+itself — PDFs that fail with `needs_ocr` — are ever sent; everything else
+stays on the machine.
 
 ## How it works
 
@@ -307,6 +337,10 @@ anydoc parses untrusted, hostile input in your process:
 - The pinned anydoc version includes the pdf-inspector fixes that bound
   previously unbounded PDF parsing (see the anydoc changelog) — upgrade the
   pin with `--locked` rebuilds rather than ad-hoc versions.
+- With `OcrHosted`, PDFs that fail with `needs_ocr` leave your process and
+  are uploaded to Firecrawl Parse (keyless unless `FIRECRAWL_API_KEY` is
+  set). Review its terms before enabling it on sensitive documents; the
+  default never sends anything anywhere.
 - Sandbox or resource-limit processes that convert untrusted uploads, as you
   would for any native parser.
 

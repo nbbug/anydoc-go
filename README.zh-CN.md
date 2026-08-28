@@ -104,6 +104,16 @@ func ToMarkdown(path string) (string, error)
 // 或传 nil 从内容自动识别。
 func ToMarkdownBytes(data []byte, format *Format) (string, error)
 
+// 带扩展行为的转换。Options 为 nil 时行为与 ToMarkdown /
+// ToMarkdownBytes 一致；Ocr = OcrHosted 时，需要 OCR 的 PDF 会发送到
+// Firecrawl Parse，而不是报 needs_ocr。
+func ToMarkdownWithOptions(path string, opts *Options) (string, error)
+func ToMarkdownBytesWithOptions(data []byte, format *Format, opts *Options) (string, error)
+
+// Options：Ocr（OcrReject 默认 / OcrHosted）、APIKey（缺省回退到
+// FIRECRAWL_API_KEY，再回退到免密钥）、APIURL（缺省回退到
+// FIRECRAWL_API_URL，再回退到 https://api.firecrawl.dev）。
+
 // 转换并将内嵌图片重写为 ![alt](images/image-N.ext)，使图片保留原位。
 // PDF 没有文档模型，与 ToMarkdownBytes 的转换方式相同。
 func ToMarkdownWithAssetLinks(data []byte, format *Format) (string, error)
@@ -136,7 +146,7 @@ const Version = "0.2.4"
 并带有可读的 `Detail`。`needs_ocr` 表示 PDF 中有扫描或纯图片页面（自
 anydoc 0.2.4 起，这些页面不再被静默丢弃，而是报错点名需要 OCR 的页码），
 并额外携带结构化的 `NeedsOcr{Pages, PageCount}` 字段。传入无效的显式
-`Format` 会报 `unknown_format`。
+`Format` 会报 `unknown_format`，Firecrawl Parse 回退失败会报 `hosted`。
 
 **文档模型**（[model.go](model.go)）：`Document`（blocks、notes、assets）、
 `Block`（`heading`、`paragraph`、`list`、`table`、`block_quote`、
@@ -144,6 +154,23 @@ anydoc 0.2.4 起，这些页面不再被静默丢弃，而是报错点名需要 
 `note_ref`、`line_break`、`math`、`checkbox`），以及 `Style`、`LinkTarget`、
 `ImageSource`、`List`、`ListItem`、`Table`、`CellSlot`、`Cell`、`Note`、
 `Asset` —— 完整且自包含的表示，内嵌资源字节存放在 `Asset.Data` 中。
+
+### Hosted OCR（可选）
+
+PDF 中有扫描或纯图片页面时，anydoc 会报 `needs_ocr` 并点名页码。可选开启
+`OcrHosted` 模式，把整个文档发送到
+[Firecrawl Parse](https://firecrawl.dev/parse) 提取文字：
+
+```go
+md, err := anydoc.ToMarkdownBytesWithOptions(pdf, &anydoc.FormatPdf, &anydoc.Options{
+	Ocr: anydoc.OcrHosted,
+})
+```
+
+无需账号即可使用；设置 `FIRECRAWL_API_KEY`（或 `Options.APIKey`）可提高
+速率限制，`FIRECRAWL_API_URL`/`Options.APIURL` 可指向其他端点。失败时错误
+kind 为 `hosted`。只有 anydoc 自己无法转换的文档（报 `needs_ocr` 的 PDF）
+才会被发送，其余内容永不离开本机。
 
 ## 工作原理
 
@@ -288,6 +315,9 @@ anydoc 在你的进程内解析不受信任的恶意输入：
 - 锁定的 anydoc 版本包含 pdf-inspector 针对此前无上界的 PDF 解析的修复
   （见 anydoc changelog）—— 升级锁定版本时应使用 `--locked` 重新构建，
   避免随意引入未经审计的版本。
+- 开启 `OcrHosted` 后，报 `needs_ocr` 的 PDF 会离开你的进程并上传到
+  Firecrawl Parse（除非设置 `FIRECRAWL_API_KEY`，否则免密钥）。处理敏感
+  文档前请先了解其服务条款；默认行为不会向任何外部服务发送任何内容。
 - 与任何原生解析器一样，处理不受信任上传的进程应做好沙箱或资源限制。
 
 ## 许可证
