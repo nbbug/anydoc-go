@@ -150,10 +150,36 @@ prepare_patched_anydoc
 locked=""
 if [ -f Cargo.lock ]; then locked="--locked"; fi
 
+# Rebuild our own crate unconditionally: rust-cache restores target/ across
+# runs, and a poisoned fingerprint there is exactly the kind of staleness this
+# workflow must not ship (a stale archive links fine for every symbol except
+# the ones a newer ABI added). Dependencies stay cached, so this costs little.
+"$build_tool" clean --release -p anydoc-go >/dev/null
+
 "$build_tool" build --release $locked --target "$target"
 
 dest="lib/$lib_dir"
 mkdir -p "$dest"
 cp "target/$target/release/$lib_name" "$dest/$lib_name"
+
+# The header declares the ABI, so the archive must export every declared
+# function. A stale archive would otherwise surface only much later, as a Go
+# link failure in the workflow's smoke test; catch it here, next to the
+# artifact itself. Skipped where nm is unavailable (the Windows MSVC runner).
+if command -v nm >/dev/null 2>&1; then
+  exported=$(nm -gU "$dest/$lib_name" 2>/dev/null | awk '{print $NF}' | sed 's/^_//' | grep '^anydoc_' | grep -v ':$' | sort -u)
+  declared=$(grep -o '^[a-z_* ]*anydoc_[a-z_0-9]*(' include/anydoc.h | grep -o 'anydoc_[a-z_0-9]*' | sort -u)
+  missing=""
+  for sym in $declared; do
+    if ! printf '%s\n' "$exported" | grep -qx "$sym"; then
+      missing="$missing $sym"
+    fi
+  done
+  if [ -n "$missing" ]; then
+    echo "error: $dest/$lib_name is missing declared ABI symbols:$missing" >&2
+    echo "The archive is stale or the rebuild was skipped; delete target/ and rebuild." >&2
+    exit 1
+  fi
+fi
 
 echo "Wrote $dest/$lib_name"
