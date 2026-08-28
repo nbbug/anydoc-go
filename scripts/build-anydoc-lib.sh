@@ -185,8 +185,13 @@ export RUSTFLAGS="${RUSTFLAGS:-} -C link-dead-code=no -C force-unwind-tables=no"
 # Rebuild our own crate unconditionally: rust-cache restores target/ across
 # runs, and a poisoned fingerprint there is exactly the kind of staleness this
 # workflow must not ship (a stale archive links fine for every symbol except
-# the ones a newer ABI added). Dependencies stay cached, so this costs little.
-"$build_tool" clean --release -p anydoc-go >/dev/null 2>&1
+# the ones a newer ABI added). `cargo clean -p` panics on the Windows runner
+# (exit 101), so bump the crate's mtime instead — that recompiles and relinks
+# only this crate, leaving cached dependencies alone — and delete the old
+# archive so a skipped relink fails the copy below instead of shipping stale
+# bytes.
+touch src/lib.rs
+rm -f "target/$target/release/$lib_name"
 
 "$build_tool" build --release $locked --target "$target"
 
