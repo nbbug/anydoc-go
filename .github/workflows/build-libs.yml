@@ -187,8 +187,12 @@ jobs:
                   members += 1
               if pos != len(data):
                   sys.exit(f"error: {path} is {len(data) - pos} bytes longer than its members declare")
-              if members < 500:
-                  sys.exit(f"error: {path} has only {members} members; expected a full build (~650+)")
+              # Fat LTO merges each crate's code into one object, so a full
+              # build has ~280 members (thin LTO had ~650). The floor only
+              # catches archives truncated at a member boundary, which the
+              # exact-end check above cannot see.
+              if members < 100:
+                  sys.exit(f"error: {path} has only {members} members; expected a full build (280+)")
               print(f"OK: {path} ({members} members, {len(data)} bytes)")
           PYEOF
       - uses: actions/setup-go@v6
