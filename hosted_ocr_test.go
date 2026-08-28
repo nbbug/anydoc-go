@@ -230,8 +230,9 @@ func TestParseHostedEnvironment(t *testing.T) {
 	}
 }
 
-func TestSendsToHosted(t *testing.T) {
+func TestWantsOcrFallback(t *testing.T) {
 	needsOcr := &ConvertError{Kind: "needs_ocr", Detail: "pages 1 of 2 need OCR"}
+	handler := OcrHandlerFunc(func(pdf []byte) (string, error) { return "# OCR\n", nil })
 	cases := []struct {
 		name string
 		err  error
@@ -239,6 +240,7 @@ func TestSendsToHosted(t *testing.T) {
 		want bool
 	}{
 		{"needs_ocr with hosted", needsOcr, &Options{Ocr: OcrHosted}, true},
+		{"needs_ocr with custom handler", needsOcr, &Options{Ocr: OcrCustom, OcrHandler: handler}, true},
 		{"needs_ocr with reject", needsOcr, &Options{Ocr: OcrReject}, false},
 		{"needs_ocr with nil options", needsOcr, nil, false},
 		{"needs_ocr with zero options", needsOcr, &Options{}, false},
@@ -248,9 +250,120 @@ func TestSendsToHosted(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := sendsToHosted(tc.err, tc.opts); got != tc.want {
-				t.Errorf("sendsToHosted = %v, want %v", got, tc.want)
+			if got := wantsOcrFallback(tc.err, tc.opts); got != tc.want {
+				t.Errorf("wantsOcrFallback = %v, want %v", got, tc.want)
 			}
 		})
+	}
+}
+
+func TestOcrFallbackCustom(t *testing.T) {
+	needsOcr := &ConvertError{Kind: "needs_ocr", Detail: "pages 1 of 2 need OCR"}
+	var received []byte
+	md, err := ocrFallback(needsOcr, []byte("PDF bytes"), "scan.pdf", &Options{
+		Ocr: OcrCustom,
+		OcrHandler: OcrHandlerFunc(func(pdf []byte) (string, error) {
+			received = pdf
+			return "# OCR", nil
+		}),
+	})
+	if err != nil {
+		t.Fatalf("ocrFallback: %v", err)
+	}
+	if md != "# OCR" {
+		t.Errorf("markdown = %q, want the handler's output", md)
+	}
+	if string(received) != "PDF bytes" {
+		t.Errorf("handler received %q, want the whole PDF", received)
+	}
+}
+
+func TestOcrFallbackCustomErrorPassesThrough(t *testing.T) {
+	sentinel := errors.New("onnx session failed")
+	md, err := ocrFallback(&ConvertError{Kind: "needs_ocr"}, []byte("PDF bytes"), "scan.pdf", &Options{
+		Ocr:        OcrCustom,
+		OcrHandler: OcrHandlerFunc(func(pdf []byte) (string, error) { return "", sentinel }),
+	})
+	if md != "" {
+		t.Errorf("markdown = %q, want empty on failure", md)
+	}
+	if err != sentinel {
+		t.Errorf("err = %v, want the handler's own error unchanged", err)
+	}
+}
+
+func TestOcrFallbackWithoutFallback(t *testing.T) {
+	needsOcr := &ConvertError{Kind: "needs_ocr", Detail: "pages 1 of 2 need OCR"}
+	cases := []struct {
+		name string
+		opts *Options
+	}{
+		{"nil options", nil},
+		{"zero options", &Options{}},
+		{"reject", &Options{Ocr: OcrReject}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			md, err := ocrFallback(needsOcr, []byte("PDF bytes"), "scan.pdf", tc.opts)
+			if md != "" {
+				t.Errorf("markdown = %q, want empty", md)
+			}
+			if err != needsOcr {
+				t.Errorf("err = %v, want the original needs_ocr error", err)
+			}
+		})
+	}
+}
+
+func TestOcrFallbackMisconfigured(t *testing.T) {
+	cases := []struct {
+		name    string
+		opts    *Options
+		wantSub string
+	}{
+		{"custom without handler", &Options{Ocr: OcrCustom}, "OcrHandler"},
+		{"unknown mode", &Options{Ocr: "clown"}, "unknown Ocr mode"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			md, err := ocrFallback(&ConvertError{Kind: "needs_ocr"}, []byte("PDF bytes"), "scan.pdf", tc.opts)
+			if md != "" {
+				t.Errorf("markdown = %q, want empty", md)
+			}
+			var ce *ConvertError
+			if !errors.As(err, &ce) {
+				t.Fatalf("err = %v, want *ConvertError", err)
+			}
+			if ce.Kind != "unsupported" {
+				t.Errorf("Kind = %q, want unsupported", ce.Kind)
+			}
+			if !strings.Contains(ce.Detail, tc.wantSub) {
+				t.Errorf("Detail = %q, want substring %q", ce.Detail, tc.wantSub)
+			}
+		})
+	}
+}
+
+func TestOcrFallbackHostedDispatch(t *testing.T) {
+	_, opts := newParseServer(t, func(w http.ResponseWriter, r *http.Request) {
+		io.WriteString(w, `{"success":true,"data":{"markdown":"# Hosted\n"}}`)
+	})
+	md, err := ocrFallback(&ConvertError{Kind: "needs_ocr"}, []byte("PDF bytes"), "scan.pdf", opts)
+	if err != nil {
+		t.Fatalf("ocrFallback: %v", err)
+	}
+	if md != "# Hosted\n" {
+		t.Errorf("markdown = %q, want the hosted response", md)
+	}
+}
+
+func TestOcrHandlerFuncAdapter(t *testing.T) {
+	handler := OcrHandlerFunc(func(pdf []byte) (string, error) { return string(pdf), nil })
+	md, err := handler.OcrMarkdown([]byte("hello"))
+	if err != nil {
+		t.Fatalf("OcrMarkdown: %v", err)
+	}
+	if md != "hello" {
+		t.Errorf("markdown = %q, want the adapted output", md)
 	}
 }

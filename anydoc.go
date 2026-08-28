@@ -88,29 +88,30 @@ func ToMarkdownBytes(data []byte, format *Format) (string, error) {
 
 // ToMarkdownWithOptions converts a document file to Markdown with extended
 // behavior. A nil Options, or one with the zero-value OcrMode, behaves exactly
-// like ToMarkdown. With Ocr = OcrHosted, a PDF whose pages need OCR is sent
-// to Firecrawl Parse instead of failing with needs_ocr.
+// like ToMarkdown. When a PDF fails with needs_ocr, the configured fallback
+// runs instead: OcrHosted sends it to Firecrawl Parse, OcrCustom hands it to
+// the injected OcrHandler.
 func ToMarkdownWithOptions(path string, opts *Options) (string, error) {
-	markdown, err := ToMarkdown(path)
-	if !sendsToHosted(err, opts) {
-		return markdown, err
+	markdown, convertErr := ToMarkdown(path)
+	if !wantsOcrFallback(convertErr, opts) {
+		return markdown, convertErr
 	}
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return "", err
 	}
-	return parseHosted(data, filepath.Base(path), opts)
+	return ocrFallback(convertErr, data, filepath.Base(path), opts)
 }
 
 // ToMarkdownBytesWithOptions converts an in-memory document to Markdown with
 // extended behavior; opts is as in ToMarkdownWithOptions. The file name sent
 // to Parse is "document.pdf".
 func ToMarkdownBytesWithOptions(data []byte, format *Format, opts *Options) (string, error) {
-	markdown, err := ToMarkdownBytes(data, format)
-	if !sendsToHosted(err, opts) {
-		return markdown, err
+	markdown, convertErr := ToMarkdownBytes(data, format)
+	if !wantsOcrFallback(convertErr, opts) {
+		return markdown, convertErr
 	}
-	return parseHosted(data, "document.pdf", opts)
+	return ocrFallback(convertErr, data, "document.pdf", opts)
 }
 
 // ToMarkdownWithAssetLinks converts an in-memory document to Markdown with

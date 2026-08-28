@@ -3,7 +3,6 @@ package anydoc
 import (
 	"bytes"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"mime/multipart"
@@ -35,14 +34,43 @@ type parseParser struct {
 	Mode string `json:"mode"`
 }
 
-// sendsToHosted reports whether err is the needs_ocr failure the hosted OCR
-// fallback exists for.
-func sendsToHosted(err error, opts *Options) bool {
-	if err == nil || opts == nil || opts.Ocr != OcrHosted {
+// wantsOcrFallback reports whether err is the needs_ocr failure and opts
+// asks for an OCR fallback instead of rejecting. The fallback itself —
+// hosted upload or custom handler — runs in ocrFallback, where invalid
+// configurations are reported.
+func wantsOcrFallback(err error, opts *Options) bool {
+	if !isNeedsOcr(err) || opts == nil {
 		return false
 	}
-	var ce *ConvertError
-	return errors.As(err, &ce) && ce.Kind == "needs_ocr"
+	return opts.Ocr != "" && opts.Ocr != OcrReject
+}
+
+// ocrFallback converts pdf through the OCR fallback configured in opts,
+// after a conversion failed with needs_ocr. With no fallback configured it
+// hands back the original error.
+func ocrFallback(needsOcrErr error, pdf []byte, filename string, opts *Options) (string, error) {
+	if opts == nil {
+		return "", needsOcrErr
+	}
+	switch opts.Ocr {
+	case "", OcrReject:
+		return "", needsOcrErr
+	case OcrHosted:
+		return parseHosted(pdf, filename, opts)
+	case OcrCustom:
+		if opts.OcrHandler == nil {
+			return "", &ConvertError{
+				Kind:   "unsupported",
+				Detail: "OcrCustom requires a non-nil Options.OcrHandler",
+			}
+		}
+		return opts.OcrHandler.OcrMarkdown(pdf)
+	default:
+		return "", &ConvertError{
+			Kind:   "unsupported",
+			Detail: fmt.Sprintf("unknown Ocr mode %q", opts.Ocr),
+		}
+	}
 }
 
 // parseHosted sends pdf to Firecrawl Parse and returns the extracted

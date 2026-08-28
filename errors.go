@@ -88,6 +88,13 @@ func unavailableError(reason string) error {
 	return &UnavailableError{Reason: reason}
 }
 
+// isNeedsOcr reports whether err is the needs_ocr failure the OCR fallbacks
+// exist for.
+func isNeedsOcr(err error) bool {
+	var ce *ConvertError
+	return errors.As(err, &ce) && ce.Kind == "needs_ocr"
+}
+
 // unavailableDetail is the message stub builds return. It names the supported
 // matrix so the failure is self-explanatory.
 const unavailableDetail = "no prebuilt anydoc static library for this build: " +

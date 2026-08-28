@@ -114,9 +114,9 @@ func ToMarkdownBytes(data []byte, format *Format) (string, error)
 func ToMarkdownWithOptions(path string, opts *Options) (string, error)
 func ToMarkdownBytesWithOptions(data []byte, format *Format, opts *Options) (string, error)
 
-// Options: Ocr (OcrReject, the default / OcrHosted), APIKey (falls back to
-// FIRECRAWL_API_KEY, then keyless), APIURL (falls back to FIRECRAWL_API_URL,
-// then https://api.firecrawl.dev).
+// Options: Ocr (OcrReject, the default / OcrHosted / OcrCustom with
+// OcrHandler), APIKey (falls back to FIRECRAWL_API_KEY, then keyless),
+// APIURL (falls back to FIRECRAWL_API_URL, then https://api.firecrawl.dev).
 
 // Convert with embedded images rewritten as ![alt](images/image-N.ext) so
 // they keep their original positions. PDF has no document model and is
@@ -164,12 +164,13 @@ assets), `Block` (`heading`, `paragraph`, `list`, `table`, `block_quote`,
 `Asset` — a full, self-contained representation with embedded asset bytes
 carried in `Asset.Data`.
 
-### Hosted OCR (opt-in)
+### OCR fallbacks (opt-in)
 
 For a PDF whose pages are scanned or image-only, anydoc fails with
-`needs_ocr` naming the pages. The opt-in `OcrHosted` mode instead sends the
-whole document to [Firecrawl Parse](https://firecrawl.dev/parse), which
-extracts the text:
+`needs_ocr` naming the pages. Two opt-in fallbacks can take over instead.
+
+**`OcrHosted`** sends the whole document to
+[Firecrawl Parse](https://firecrawl.dev/parse), which extracts the text:
 
 ```go
 md, err := anydoc.ToMarkdownBytesWithOptions(pdf, &anydoc.FormatPdf, &anydoc.Options{
@@ -179,9 +180,36 @@ md, err := anydoc.ToMarkdownBytesWithOptions(pdf, &anydoc.FormatPdf, &anydoc.Opt
 
 It works keyless; set `FIRECRAWL_API_KEY` (or `Options.APIKey`) to raise the
 rate limits, and `FIRECRAWL_API_URL`/`Options.APIURL` to point at a different
-endpoint. Failures report kind `hosted`. Only documents anydoc cannot convert
-itself — PDFs that fail with `needs_ocr` — are ever sent; everything else
-stays on the machine.
+endpoint. Failures report kind `hosted`.
+
+**`OcrCustom`** hands the document to an `OcrHandler` you inject — a local
+OCR model (for example ONNX), a local OCR service, or any API of your own:
+
+```go
+type onnxOcr struct {
+	session *ort.Session // your ONNX inference session
+}
+
+func (o *onnxOcr) OcrMarkdown(pdf []byte) (string, error) {
+	return runOcr(o.session, pdf) // pages → text → Markdown, all local
+}
+
+md, err := anydoc.ToMarkdownBytesWithOptions(pdf, &anydoc.FormatPdf, &anydoc.Options{
+	Ocr:        anydoc.OcrCustom,
+	OcrHandler: &onnxOcr{session: session},
+})
+
+// OcrHandlerFunc adapts a plain function:
+//   anydoc.OcrHandlerFunc(func(pdf []byte) (string, error) { ... })
+```
+
+The handler receives the whole PDF and returns the extracted Markdown; its
+errors pass through unchanged. `OcrCustom` with a nil handler reports an
+`unsupported` error.
+
+Only documents anydoc cannot convert itself — PDFs that fail with
+`needs_ocr` — ever reach a fallback; everything else stays in the local
+conversion (and on the machine, except for `OcrHosted`).
 
 ## How it works
 

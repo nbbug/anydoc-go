@@ -110,9 +110,9 @@ func ToMarkdownBytes(data []byte, format *Format) (string, error)
 func ToMarkdownWithOptions(path string, opts *Options) (string, error)
 func ToMarkdownBytesWithOptions(data []byte, format *Format, opts *Options) (string, error)
 
-// Options：Ocr（OcrReject 默认 / OcrHosted）、APIKey（缺省回退到
-// FIRECRAWL_API_KEY，再回退到免密钥）、APIURL（缺省回退到
-// FIRECRAWL_API_URL，再回退到 https://api.firecrawl.dev）。
+// Options：Ocr（OcrReject 默认 / OcrHosted / OcrCustom + OcrHandler）、
+// APIKey（缺省回退到 FIRECRAWL_API_KEY，再回退到免密钥）、APIURL（缺省
+// 回退到 FIRECRAWL_API_URL，再回退到 https://api.firecrawl.dev）。
 
 // 转换并将内嵌图片重写为 ![alt](images/image-N.ext)，使图片保留原位。
 // PDF 没有文档模型，与 ToMarkdownBytes 的转换方式相同。
@@ -155,10 +155,12 @@ anydoc 0.2.4 起，这些页面不再被静默丢弃，而是报错点名需要 
 `ImageSource`、`List`、`ListItem`、`Table`、`CellSlot`、`Cell`、`Note`、
 `Asset` —— 完整且自包含的表示，内嵌资源字节存放在 `Asset.Data` 中。
 
-### Hosted OCR（可选）
+### OCR 回退（可选）
 
-PDF 中有扫描或纯图片页面时，anydoc 会报 `needs_ocr` 并点名页码。可选开启
-`OcrHosted` 模式，把整个文档发送到
+PDF 中有扫描或纯图片页面时，anydoc 会报 `needs_ocr` 并点名页码。可以
+开启两种可选回退，由它们接管转换。
+
+**`OcrHosted`** 把整个文档发送到
 [Firecrawl Parse](https://firecrawl.dev/parse) 提取文字：
 
 ```go
@@ -169,8 +171,34 @@ md, err := anydoc.ToMarkdownBytesWithOptions(pdf, &anydoc.FormatPdf, &anydoc.Opt
 
 无需账号即可使用；设置 `FIRECRAWL_API_KEY`（或 `Options.APIKey`）可提高
 速率限制，`FIRECRAWL_API_URL`/`Options.APIURL` 可指向其他端点。失败时错误
-kind 为 `hosted`。只有 anydoc 自己无法转换的文档（报 `needs_ocr` 的 PDF）
-才会被发送，其余内容永不离开本机。
+kind 为 `hosted`。
+
+**`OcrCustom`** 把文档交给注入的 `OcrHandler` —— 可以是本地 OCR 模型
+（如 ONNX）、本地 OCR 服务，或你自己的任意 API：
+
+```go
+type onnxOcr struct {
+	session *ort.Session // 你的 ONNX 推理会话
+}
+
+func (o *onnxOcr) OcrMarkdown(pdf []byte) (string, error) {
+	return runOcr(o.session, pdf) // 页面 → 文字 → Markdown，全程本地
+}
+
+md, err := anydoc.ToMarkdownBytesWithOptions(pdf, &anydoc.FormatPdf, &anydoc.Options{
+	Ocr:        anydoc.OcrCustom,
+	OcrHandler: &onnxOcr{session: session},
+})
+
+// OcrHandlerFunc 可以适配普通函数：
+//   anydoc.OcrHandlerFunc(func(pdf []byte) (string, error) { ... })
+```
+
+回调收到整个 PDF，返回提取的 Markdown；它返回的错误原样透传。`OcrCustom`
+未设置 `OcrHandler` 时报 `unsupported` 错误。
+
+只有 anydoc 自己无法转换的文档（报 `needs_ocr` 的 PDF）才会进入回退；
+其余内容一律走本地转换（且除 `OcrHosted` 外不离开本机）。
 
 ## 工作原理
 
