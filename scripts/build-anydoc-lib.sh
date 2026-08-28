@@ -179,8 +179,14 @@ if [ -f Cargo.lock ]; then locked="--locked"; fi
 #   tree never enter the archive
 # - -C force-unwind-tables=no: skip unwind tables for functions that cannot
 #   unwind. Panic = unwind is kept: the ABI's panic containment (guarded)
-#   depends on it, and landing pads are still emitted where needed.
-export RUSTFLAGS="${RUSTFLAGS:-} -C link-dead-code=no -C force-unwind-tables=no"
+#   depends on it, and landing pads are still emitted where needed. The
+#   Windows MSVC target REQUIRES unwind tables (x64 SEH); rustc refuses
+#   force-unwind-tables=no there, so it applies to the other targets only.
+rustflags="-C link-dead-code=no"
+if [ "$target" != "x86_64-pc-windows-msvc" ]; then
+  rustflags="$rustflags -C force-unwind-tables=no"
+fi
+export RUSTFLAGS="${RUSTFLAGS:-} $rustflags"
 
 # Rebuild our own crate unconditionally: rust-cache restores target/ across
 # runs, and a poisoned fingerprint there is exactly the kind of staleness this
