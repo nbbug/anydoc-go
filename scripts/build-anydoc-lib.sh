@@ -154,7 +154,7 @@ if [ -f Cargo.lock ]; then locked="--locked"; fi
 # runs, and a poisoned fingerprint there is exactly the kind of staleness this
 # workflow must not ship (a stale archive links fine for every symbol except
 # the ones a newer ABI added). Dependencies stay cached, so this costs little.
-"$build_tool" clean --release -p anydoc-go >/dev/null
+"$build_tool" clean --release -p anydoc-go >/dev/null 2>&1
 
 "$build_tool" build --release $locked --target "$target"
 
@@ -167,8 +167,18 @@ cp "target/$target/release/$lib_name" "$dest/$lib_name"
 # link failure in the workflow's smoke test; catch it here, next to the
 # artifact itself. Skipped where nm is unavailable (the Windows MSVC runner).
 if command -v nm >/dev/null 2>&1; then
-  exported=$(nm -gU "$dest/$lib_name" 2>/dev/null | awk '{print $NF}' | sed 's/^_//' | grep '^anydoc_' | grep -v ':$' | sort -u)
-  declared=$(grep -o '^[a-z_* ]*anydoc_[a-z_0-9]*(' include/anydoc.h | grep -o 'anydoc_[a-z_0-9]*' | sort -u)
+  # nm can exit non-zero on members it cannot read (for example when the
+  # toolchain's nm predates the LLVM that produced the archive); it still
+  # prints every symbol it managed to read. `|| true` keeps that partial
+  # success from tripping set -e; the symbol comparison below stays
+  # authoritative. An empty result fails loudly instead of silently.
+  symbols=$(nm -gU "$dest/$lib_name" 2>/dev/null) || true
+  exported=$(printf '%s\n' "$symbols" | awk '{print $NF}' | sed 's/^_//' | grep '^anydoc_' | grep -v ':$' | sort -u) || true
+  declared=$(grep -o '^[a-z_* ]*anydoc_[a-z_0-9]*(' include/anydoc.h | grep -o 'anydoc_[a-z_0-9]*' | sort -u) || true
+  if [ -z "$declared" ]; then
+    echo "error: no anydoc_* function declarations found in include/anydoc.h" >&2
+    exit 1
+  fi
   missing=""
   for sym in $declared; do
     if ! printf '%s\n' "$exported" | grep -qx "$sym"; then
