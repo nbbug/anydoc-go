@@ -150,6 +150,15 @@ prepare_patched_anydoc
 locked=""
 if [ -f Cargo.lock ]; then locked="--locked"; fi
 
+# Trim the archive without touching runtime behavior:
+# - -C link-dead-code=no: drop code unreachable from the exported ABI (the
+#   #[no_mangle] functions are the roots), so unused paths of the dependency
+#   tree never enter the archive
+# - -C force-unwind-tables=no: skip unwind tables for functions that cannot
+#   unwind. Panic = unwind is kept: the ABI's panic containment (guarded)
+#   depends on it, and landing pads are still emitted where needed.
+export RUSTFLAGS="${RUSTFLAGS:-} -C link-dead-code=no -C force-unwind-tables=no"
+
 # Rebuild our own crate unconditionally: rust-cache restores target/ across
 # runs, and a poisoned fingerprint there is exactly the kind of staleness this
 # workflow must not ship (a stale archive links fine for every symbol except

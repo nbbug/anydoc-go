@@ -33,8 +33,12 @@ anydoc = { path = "patched-anydoc" }
 
 [workspace]
 
-# Mirrors the anydoc workspace's release profile: without it the archive keeps
-# every debug symbol and roughly doubles in size.
+# The archive is a staticlib consumed by the Go linker, so build time is paid
+# once in CI while runtime size and speed win:
+# - fat LTO (whole-graph dead-code elimination and cross-crate inlining) beats
+#   thin LTO for a library that is linked as a unit
+# - strip keeps debug symbols and local symbol names out of the archive
 [profile.release]
-lto = "thin"
+lto = true
+codegen-units = 1
 strip = "symbols"
