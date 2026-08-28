@@ -5,3 +5,4 @@
 .anydoc-*.crate
 zig-cache/
 .zig-cache/
+.DS_Store
