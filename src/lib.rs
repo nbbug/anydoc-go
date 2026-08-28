@@ -77,8 +77,6 @@ fn set_last_error(msg: &str) {
 }
 
 fn error_code(err: &ConvertError) -> c_int {
-    // Exhaustive on purpose: a new ConvertError variant in a future anydoc
-    // version fails this build instead of silently mapping to Unsupported.
     match err {
         ConvertError::Unsupported(_) => ERR_UNSUPPORTED,
         ConvertError::NeedsOcr { .. } => ERR_NEEDS_OCR,
@@ -87,6 +85,11 @@ fn error_code(err: &ConvertError) -> c_int {
         ConvertError::ResourceLimit { .. } => ERR_RESOURCE_LIMIT,
         ConvertError::MissingPart { .. } => ERR_MISSING_PART,
         ConvertError::Io(_) => ERR_IO,
+        // ConvertError is #[non_exhaustive], so a wildcard arm is mandatory.
+        // A variant added by a future anydoc version lands here as
+        // Unsupported (the detail string still names it) until the pin is
+        // upgraded and the variant gets a dedicated ERR_* code.
+        _ => ERR_UNSUPPORTED,
     }
 }
 
