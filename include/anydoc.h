@@ -59,6 +59,11 @@
 #define ERR_UNKNOWN_FORMAT 9
 
 /**
+ * `ConvertError::NeedsOcr`.
+ */
+#define ERR_NEEDS_OCR 10
+
+/**
  * C-side format tag. Stable; mirrors the Node/Python lowercase string names
  * via `format_name`. `ANYDOC_FORMAT_NONE` is the `Option::None` sentinel.
  */
@@ -254,6 +259,18 @@ void anydoc_buffer_free(uint8_t *buf, uintptr_t len);
  * with `anydoc_string_free`. Returns null when there is no last error.
  */
 char *anydoc_last_error(void);
+
+/**
+ * After a call returned `ERR_NEEDS_OCR` on this thread, return the
+ * 1-indexed pages that need OCR and the document's page count. `*out_pages`
+ * points into thread-local storage owned by the library; it stays valid
+ * until the next anydoc call on this thread that records an error, and the
+ * caller must copy it before then. Call before `anydoc_last_error`, which
+ * takes the slot. On any other state the outputs are zeroed.
+ */
+int anydoc_last_error_ocr_pages(const uint32_t **out_pages,
+                                uintptr_t *out_len,
+                                uint32_t *out_page_count);
 
 /**
  * Return the lowercase name of a format tag, or null for an unknown tag.

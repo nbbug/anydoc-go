@@ -129,7 +129,7 @@ func EmbeddedLib() []byte
 func ExtractLib(dir string) (string, error)
 
 // Module version, kept in lockstep with the pinned anydoc crate.
-const Version = "0.2.3"
+const Version = "0.2.4"
 ```
 
 **Formats** ([format.go](format.go)): `FormatDoc`, `FormatDocx`, `FormatOdt`,
@@ -138,9 +138,12 @@ const Version = "0.2.3"
 
 **Errors** ([errors.go](errors.go)): conversions return `*ConvertError` with a
 `Kind` matching the Node/Python bindings — `unsupported`, `malformed`,
-`encrypted`, `resource_limit`, `missing_part`, `io`, `pdf_no_model` — plus a
-human-readable `Detail`. An invalid explicit `Format` reports
-`unknown_format`.
+`encrypted`, `resource_limit`, `missing_part`, `io`, `pdf_no_model`,
+`needs_ocr` — plus a human-readable `Detail`. `needs_ocr` means some pages of
+a PDF are scanned or image-only (since anydoc 0.2.4 they fail the conversion
+naming the pages instead of being silently dropped) and also carries the
+structured `NeedsOcr{Pages, PageCount}` fields. An invalid explicit `Format`
+reports `unknown_format`.
 
 **Document model** ([model.go](model.go)): `Document` (blocks, notes,
 assets), `Block` (`heading`, `paragraph`, `list`, `table`, `block_quote`,
@@ -154,7 +157,7 @@ carried in `Asset.Data`.
 
 1. **Rust C ABI** — this repository is also a Rust crate
    ([Cargo.toml](Cargo.toml)) that wraps the published `anydoc` crate
-   (pinned exactly, currently `=0.2.3`) and exposes a small C ABI
+   (pinned exactly, currently `=0.2.4`) and exposes a small C ABI
    ([src/lib.rs](src/lib.rs)): `anydoc_to_markdown*`, `anydoc_to_document`,
    format detection, and matching `_free` functions. A build script
    re-exports anydoc's crate-private `document_to_markdown` serializer so the
@@ -216,7 +219,7 @@ answer.
 You only need this to upgrade anydoc, change the C ABI, or support a new
 platform. Users of the module never do.
 
-Requirements: Rust (rustup, any recent stable — anydoc 0.2.3 needs ≥ 1.88),
+Requirements: Rust (rustup, any recent stable — anydoc 0.2.4 needs ≥ 1.88),
 plus one cross toolchain: `cross` (with Docker) or `cargo-zigbuild`
 (bundles zig, no Docker).
 

@@ -89,7 +89,7 @@ dependencies = [
 
 [[package]]
 name = "anydoc"
-version = "0.2.3"
+version = "0.2.4"
 dependencies = [
  "cfb",
  "csv",
@@ -103,7 +103,7 @@ dependencies = [
 
 [[package]]
 name = "anydoc-go"
-version = "0.2.3"
+version = "0.2.4"
 dependencies = [
  "anydoc",
  "cbindgen",

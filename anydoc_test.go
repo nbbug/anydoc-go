@@ -372,6 +372,7 @@ func TestWireConstsMatchHeader(t *testing.T) {
 		{"errPDFNoModel", errPDFNoModel, "ERR_PDF_NO_MODEL"},
 		{"errInvalidArg", errInvalidArg, "ERR_INVALID_ARG"},
 		{"errUnknownFormat", errUnknownFormat, "ERR_UNKNOWN_FORMAT"},
+		{"errNeedsOcr", errNeedsOcr, "ERR_NEEDS_OCR"},
 		{"formatNone", formatNone, "ANYDOC_FORMAT_NONE"},
 		{"formatDoc", formatDoc, "ANYDOC_FORMAT_DOC"},
 		{"formatCsv", formatCsv, "ANYDOC_FORMAT_CSV"},

@@ -209,8 +209,14 @@ func convertError(code C.int) error {
 		return nil
 	}
 	kind := errorKind(code)
+	var needsOcr *NeedsOcrError
+	if code == errNeedsOcr {
+		// Before lastError(): the pages are borrowed from the same slot that
+		// lastError takes, and must be copied while this thread holds it.
+		needsOcr = lastErrorOcrPages()
+	}
 	detail := lastError()
-	return &ConvertError{Kind: kind, Detail: detail}
+	return &ConvertError{Kind: kind, Detail: detail, NeedsOcr: needsOcr}
 }
 
 func errorKind(code C.int) string {
@@ -233,6 +239,8 @@ func errorKind(code C.int) string {
 		return "invalid_argument"
 	case errUnknownFormat:
 		return "unknown_format"
+	case errNeedsOcr:
+		return "needs_ocr"
 	default:
 		return fmt.Sprintf("unknown_error(%d)", int(code))
 	}
@@ -248,6 +256,25 @@ func lastError() string {
 	}
 	defer C.anydoc_string_free(ptr)
 	return cString(ptr)
+}
+
+// lastErrorOcrPages copies the pages needing OCR out of the thread-local slot
+// after an ABI call returned errNeedsOcr. Only call it from inside call(),
+// where the OS thread is pinned to the one the ABI entry ran on, and before
+// lastError(): the pages pointer is borrowed from the slot that lastError
+// takes, so the copy must happen first.
+func lastErrorOcrPages() *NeedsOcrError {
+	var pages *C.uint32_t
+	var n C.uintptr_t
+	var pageCount C.uint32_t
+	if C.anydoc_last_error_ocr_pages(&pages, &n, &pageCount) != errOK || pages == nil || n == 0 {
+		return nil
+	}
+	pageNums := make([]uint32, int(n))
+	for i, page := range unsafe.Slice(pages, int(n)) {
+		pageNums[i] = uint32(page)
+	}
+	return &NeedsOcrError{Pages: pageNums, PageCount: uint32(pageCount)}
 }
 
 // cStringN reads a length-prefixed C buffer as a Go string. The bytes are

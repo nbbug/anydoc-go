@@ -20,6 +20,7 @@ const (
 	errPDFNoModel    = 7
 	errInvalidArg    = 8
 	errUnknownFormat = 9
+	errNeedsOcr      = 10
 )
 
 // ConvertError is the typed error every conversion function returns. It
@@ -29,11 +30,25 @@ const (
 type ConvertError struct {
 	// Kind is the lowercase variant name, matching the Node and Python
 	// bindings: "unsupported", "malformed", "encrypted", "resource_limit",
-	// "missing_part", "io", "pdf_no_model". Go also reports
+	// "missing_part", "io", "pdf_no_model", "needs_ocr". Go also reports
 	// "unknown_format" for an invalid explicit Format.
 	Kind string
-	// Detail is the crate's Display output for the error.
+	// Detail is the crate's Display output for the error, e.g.
+	// "pages 2, 5-7 of 12 need OCR".
 	Detail string
+	// NeedsOcr is non-nil exactly when Kind == "needs_ocr": some pages of a
+	// PDF are scanned or image-only and were not converted. It mirrors the
+	// Node binding's `pages`/`pageCount` error fields.
+	NeedsOcr *NeedsOcrError
+}
+
+// NeedsOcrError names the pages of a PDF that need OCR. Pages are 1-indexed,
+// matching anydoc's reporting and the Node binding.
+type NeedsOcrError struct {
+	// Pages are the 1-indexed page numbers that need OCR.
+	Pages []uint32
+	// PageCount is the number of pages in the document.
+	PageCount uint32
 }
 
 func (e *ConvertError) Error() string {

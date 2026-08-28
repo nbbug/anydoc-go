@@ -47,31 +47,61 @@ pub const ERR_PDF_NO_MODEL: c_int = 7;
 pub const ERR_INVALID_ARG: c_int = 8;
 /// Unknown format name passed to the ABI.
 pub const ERR_UNKNOWN_FORMAT: c_int = 9;
+/// `ConvertError::NeedsOcr`.
+pub const ERR_NEEDS_OCR: c_int = 10;
+
+/// The last error on this thread: its message plus, for `NeedsOcr`, the pages
+/// needing OCR, so callers can read them structurally the way the Node
+/// (`needsOcr` with `pages`/`pageCount`) and Python bindings expose them.
+struct LastError {
+    message: CString,
+    ocr_pages: Option<Vec<u32>>,
+    page_count: u32,
+}
 
 thread_local! {
-    static LAST_ERROR: std::cell::RefCell<Option<CString>> = const { std::cell::RefCell::new(None) };
+    static LAST_ERROR: std::cell::RefCell<Option<LastError>> = const { std::cell::RefCell::new(None) };
+}
+
+fn cstring(msg: String) -> CString {
+    CString::new(msg).unwrap_or_else(|_| CString::new("<invalid utf-8>").unwrap())
 }
 
 fn set_last_error(msg: &str) {
-    let cstring = CString::new(msg).unwrap_or_else(|_| CString::new("<invalid utf-8>").unwrap());
-    LAST_ERROR.with(|cell| *cell.borrow_mut() = Some(cstring));
+    let cstring = cstring(msg.to_string());
+    LAST_ERROR.with(|cell| *cell.borrow_mut() = Some(LastError {
+        message: cstring,
+        ocr_pages: None,
+        page_count: 0,
+    }));
 }
 
 fn error_code(err: &ConvertError) -> c_int {
+    // Exhaustive on purpose: a new ConvertError variant in a future anydoc
+    // version fails this build instead of silently mapping to Unsupported.
     match err {
         ConvertError::Unsupported(_) => ERR_UNSUPPORTED,
+        ConvertError::NeedsOcr { .. } => ERR_NEEDS_OCR,
         ConvertError::Malformed { .. } => ERR_MALFORMED,
         ConvertError::Encrypted => ERR_ENCRYPTED,
         ConvertError::ResourceLimit { .. } => ERR_RESOURCE_LIMIT,
         ConvertError::MissingPart { .. } => ERR_MISSING_PART,
         ConvertError::Io(_) => ERR_IO,
-        _ => ERR_UNSUPPORTED,
     }
 }
 
 fn fail(err: ConvertError) -> c_int {
     let code = error_code(&err);
-    set_last_error(&err.to_string());
+    let message = cstring(err.to_string());
+    let (ocr_pages, page_count) = match &err {
+        ConvertError::NeedsOcr { pages, page_count } => (Some(pages.clone()), *page_count),
+        _ => (None, 0),
+    };
+    LAST_ERROR.with(|cell| *cell.borrow_mut() = Some(LastError {
+        message,
+        ocr_pages,
+        page_count,
+    }));
     code
 }
 
@@ -571,12 +601,50 @@ pub unsafe extern "C" fn anydoc_buffer_free(buf: *mut u8, len: usize) {
 pub unsafe extern "C" fn anydoc_last_error() -> *mut c_char {
     LAST_ERROR
         .with(|cell| cell.borrow_mut().take())
-        .and_then(|cstring| {
+        .and_then(|last| {
             // Re-allocate as a fresh owned C string the caller can free.
-            let bytes = cstring.into_bytes_with_nul();
+            let bytes = last.message.into_bytes_with_nul();
             CString::from_vec_with_nul(bytes).ok().map(|cs| cs.into_raw())
         })
         .unwrap_or(ptr::null_mut())
+}
+
+/// After a call returned `ERR_NEEDS_OCR` on this thread, return the
+/// 1-indexed pages that need OCR and the document's page count. `*out_pages`
+/// points into thread-local storage owned by the library; it stays valid
+/// until the next anydoc call on this thread that records an error, and the
+/// caller must copy it before then. Call before `anydoc_last_error`, which
+/// takes the slot. On any other state the outputs are zeroed.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn anydoc_last_error_ocr_pages(
+    out_pages: *mut *const u32,
+    out_len: *mut usize,
+    out_page_count: *mut u32,
+) -> c_int {
+    if out_pages.is_null() || out_len.is_null() || out_page_count.is_null() {
+        set_last_error("anydoc: null pointer passed to anydoc_last_error_ocr_pages");
+        return ERR_INVALID_ARG;
+    }
+    LAST_ERROR.with(|cell| {
+        let slot = cell.borrow();
+        match &*slot {
+            Some(LastError { ocr_pages: Some(pages), page_count, .. }) => {
+                unsafe {
+                    *out_pages = pages.as_ptr();
+                    *out_len = pages.len();
+                    *out_page_count = *page_count;
+                }
+            }
+            _ => {
+                unsafe {
+                    *out_pages = ptr::null();
+                    *out_len = 0;
+                    *out_page_count = 0;
+                }
+            }
+        }
+    });
+    ERR_OK
 }
 
 // ---- Format-name parity helpers -------------------------------------------

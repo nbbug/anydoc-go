@@ -123,7 +123,7 @@ func EmbeddedLib() []byte
 func ExtractLib(dir string) (string, error)
 
 // 模块版本，与锁定的 anydoc crate 版本同步。
-const Version = "0.2.3"
+const Version = "0.2.4"
 ```
 
 **格式**（[format.go](format.go)）：`FormatDoc`、`FormatDocx`、`FormatOdt`、
@@ -132,8 +132,11 @@ const Version = "0.2.3"
 
 **错误**（[errors.go](errors.go)）：转换函数返回 `*ConvertError`，其 `Kind`
 与 Node/Python 绑定一致 —— `unsupported`、`malformed`、`encrypted`、
-`resource_limit`、`missing_part`、`io`、`pdf_no_model` —— 并带有可读的
-`Detail`。传入无效的显式 `Format` 会报 `unknown_format`。
+`resource_limit`、`missing_part`、`io`、`pdf_no_model`、`needs_ocr` ——
+并带有可读的 `Detail`。`needs_ocr` 表示 PDF 中有扫描或纯图片页面（自
+anydoc 0.2.4 起，这些页面不再被静默丢弃，而是报错点名需要 OCR 的页码），
+并额外携带结构化的 `NeedsOcr{Pages, PageCount}` 字段。传入无效的显式
+`Format` 会报 `unknown_format`。
 
 **文档模型**（[model.go](model.go)）：`Document`（blocks、notes、assets）、
 `Block`（`heading`、`paragraph`、`list`、`table`、`block_quote`、
@@ -146,7 +149,7 @@ const Version = "0.2.3"
 
 1. **Rust C ABI** —— 本仓库同时也是一个 Rust crate（[Cargo.toml](Cargo.toml)），
    它封装了 crates.io 上发布的 `anydoc` crate（精确锁定版本，当前为
-   `=0.2.3`），并暴露一个精简的 C ABI（[src/lib.rs](src/lib.rs)）：
+   `=0.2.4`），并暴露一个精简的 C ABI（[src/lib.rs](src/lib.rs)）：
    `anydoc_to_markdown*`、`anydoc_to_document`、格式检测，以及配套的
    `_free` 释放函数。构建脚本将 anydoc 内部私有的 `document_to_markdown`
    序列化器重新导出，从而保留官方 GFM 渲染能力。
@@ -201,7 +204,7 @@ cgo 开启环境下执行 `go mod vendor`：它会捕获全部五个 `lib/<platf
 
 只有升级 anydoc、修改 C ABI 或支持新平台时才需要；模块使用者无需关心。
 
-要求：Rust（rustup，任意较新的稳定版 —— anydoc 0.2.3 需要 ≥ 1.88），外加
+要求：Rust（rustup，任意较新的稳定版 —— anydoc 0.2.4 需要 ≥ 1.88），外加
 一种交叉编译工具链：`cross`（需要 Docker）或 `cargo-zigbuild`（自带 zig，
 无需 Docker）。
 
