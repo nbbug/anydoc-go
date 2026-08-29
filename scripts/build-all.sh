@@ -8,6 +8,7 @@
 #   darwin/amd64   x86_64-apple-darwin
 #   darwin/arm64   aarch64-apple-darwin
 #   windows/amd64  x86_64-pc-windows-msvc
+#   windows/arm64  aarch64-pc-windows-msvc
 #
 # Tool selection:
 #   - macOS targets always build with plain cargo on a macOS host: Apple's SDK
@@ -44,6 +45,7 @@ darwin_targets=(
 )
 windows_targets=(
   x86_64-pc-windows-msvc
+  aarch64-pc-windows-msvc
 )
 
 # Pick the cross toolchain for the Linux targets.
@@ -63,6 +65,7 @@ for target in "${linux_targets[@]}" "${darwin_targets[@]}" "${windows_targets[@]
     x86_64-apple-darwin) dir=darwin_amd64 ;;
     aarch64-apple-darwin) dir=darwin_arm64 ;;
     x86_64-pc-windows-msvc) dir=windows_amd64 ;;
+    aarch64-pc-windows-msvc) dir=windows_arm64 ;;
     x86_64-unknown-linux-gnu) dir=linux_amd64 ;;
     aarch64-unknown-linux-gnu) dir=linux_arm64 ;;
   esac

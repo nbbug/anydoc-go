@@ -40,11 +40,12 @@ case "$target" in
   x86_64-apple-darwin) lib_dir=darwin_amd64 ;;
   aarch64-apple-darwin) lib_dir=darwin_arm64 ;;
   x86_64-pc-windows-msvc) lib_dir=windows_amd64 ;;
+  aarch64-pc-windows-msvc) lib_dir=windows_arm64 ;;
   x86_64-unknown-linux-gnu) lib_dir=linux_amd64 ;;
   aarch64-unknown-linux-gnu) lib_dir=linux_arm64 ;;
   *)
     echo "error: unsupported target '$target'." >&2
-    echo "Supported: {x86_64,aarch64}-apple-darwin, {x86_64,aarch64}-unknown-linux-gnu, x86_64-pc-windows-msvc" >&2
+    echo "Supported: {x86_64,aarch64}-apple-darwin, {x86_64,aarch64}-unknown-linux-gnu, {x86_64,aarch64}-pc-windows-msvc" >&2
     exit 1
     ;;
 esac
@@ -55,7 +56,7 @@ esac
 # so that target only builds on a native Windows host, and Go's cgo links the
 # .lib with mingw gcc.
 case "$target" in
-  x86_64-pc-windows-msvc) lib_name=anydoc_go.lib ;;
+  x86_64-pc-windows-msvc | aarch64-pc-windows-msvc) lib_name=anydoc_go.lib ;;
   *) lib_name=libanydoc_go.a ;;
 esac
 
@@ -183,9 +184,10 @@ if [ -f Cargo.lock ]; then locked="--locked"; fi
 #   Windows MSVC target REQUIRES unwind tables (x64 SEH); rustc refuses
 #   force-unwind-tables=no there, so it applies to the other targets only.
 rustflags="-C link-dead-code=no"
-if [ "$target" != "x86_64-pc-windows-msvc" ]; then
-  rustflags="$rustflags -C force-unwind-tables=no"
-fi
+case "$target" in
+  *pc-windows-msvc) ;; # x64 SEH requires unwind tables
+  *) rustflags="$rustflags -C force-unwind-tables=no" ;;
+esac
 export RUSTFLAGS="${RUSTFLAGS:-} $rustflags"
 
 # Rebuild our own crate unconditionally: rust-cache restores target/ across

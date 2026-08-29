@@ -1,3 +1,5 @@
+**[English](README.md) · [中文文档](README.zh-CN.md)**
+
 # anydoc-go
 
 Go bindings for [anydoc](https://github.com/firecrawl/anydoc) — the Rust
@@ -8,8 +10,6 @@ anydoc-go links anydoc as a **static library through cgo**, with prebuilt
 archives packaged in the module for every supported platform. Users of this
 module never install Rust or any other toolchain: `go get` downloads the
 archive and `go build` links it.
-
-[中文文档](README.zh-CN.md)
 
 ## Requirements
 
@@ -79,12 +79,14 @@ Windows, which ships the MSVC COFF archive `anydoc_go.lib`.
 | darwin/amd64  | `x86_64-apple-darwin`        | clang (Xcode CLT)            |
 | darwin/arm64  | `aarch64-apple-darwin`       | clang (Xcode CLT)            |
 | windows/amd64 | `x86_64-pc-windows-msvc`     | mingw-w64 gcc                |
+| windows/arm64 | `aarch64-pc-windows-msvc`    | mingw-w64 gcc                |
 
 Notes:
 
-- **Windows uses the MSVC target**, matching the WeKnora binding. The archive
-  is built with the MSVC toolchain (which cannot be redistributed, so only a
-  native Windows host or the CI Windows runner can build it) and produces
+- **Windows uses MSVC targets** (`x86_64-pc-windows-msvc` and
+  `aarch64-pc-windows-msvc`), matching the WeKnora binding. The archives are
+  built with the MSVC toolchain (which cannot be redistributed, so only a
+  native Windows host or the CI Windows runner can build them) and produce
   `anydoc_go.lib`. Go's cgo still links with mingw gcc — GNU ld reads MSVC
   `.lib` archives — so users need the standard mingw-w64 toolchain, not
   Visual Studio.
@@ -221,7 +223,7 @@ conversion (and on the machine, except for `OcrHosted`).
    re-exports anydoc's crate-private `document_to_markdown` serializer so the
    official GFM rendering stays available.
 2. **One static archive per platform** — `crate-type = ["staticlib"]` builds
-   `libanydoc_go.a` (~30 MB). The five archives are committed under
+   `libanydoc_go.a` (~20 MB). The six archives are committed under
    [lib/](lib/).
 3. **Platform files with build tags** — one Go file per platform
    ([lib_linux_amd64.go](lib_linux_amd64.go), …) is selected by
@@ -233,7 +235,7 @@ conversion (and on the machine, except for `OcrHosted`).
    archive a _declared dependency of the package_, so `go mod vendor`, module
    zips, and `go list` can never silently drop it. The bytes are exposed by
    `EmbeddedLib()`/`ExtractLib()`; binaries that never call them pay nothing —
-   the linker eliminates the unreferenced ~30 MB.
+   the linker eliminates the unreferenced ~20 MB.
 5. **A user-friendly API** — [anydoc.go](anydoc.go) hides every pointer and
    free call behind plain Go functions, pins the goroutine during ABI calls
    (the error slot is thread-local), and bounds-decodes the document buffer
@@ -263,11 +265,11 @@ of this package; they fail fast at run time with an explanation.
 directives declare them as package dependencies, so vendored builds keep
 working with `-mod=vendor` — the `#cgo LDFLAGS` paths are `${SRCDIR}`-relative
 and resolve inside the vendor tree. Run `go mod vendor` with the default
-cgo-enabled environment: it captures all five `lib/<platform>/` trees (for
+cgo-enabled environment: it captures all six `lib/<platform>/` trees (for
 every platform, not just the host). Vendoring with `CGO_ENABLED=0` captures
 only the header — which is all a stub build needs.
 
-Mind the module size: the five archives total ~150 MB, so a `go get` pulls a
+Mind the module size: the six archives total ~120 MB, so a `go get` pulls a
 large module zip (well under proxy limits, but worth knowing). If your
 registry or bandwidth makes that uncomfortable, vendoring once is the usual
 answer.
@@ -306,7 +308,7 @@ scripts pin the exact `anydoc` version, refuse to build when
 
 The **Build static libraries** workflow
 ([.github/workflows/build-libs.yml](.github/workflows/build-libs.yml)) builds
-all five archives, smoke-tests them by linking and converting through the Go
+all six archives, smoke-tests them by linking and converting through the Go
 package, then commits and pushes them to the main branch:
 
 **Actions → “Build static libraries” → Run workflow.**
@@ -342,7 +344,7 @@ Go-native server gains nothing from the wasm runtime.
 - **cgo required.** Breaks `CGO_ENABLED=0` builds and needs a C toolchain per
   platform; some PaaS/buildpack setups and static-analysis tooling dislike
   cgo.
-- **Per-platform archives.** Five files × ~30 MB in the module; wasm is a
+- **Per-platform archives.** Six files × ~20 MB in the module; wasm is a
   single portable artifact. The linked binary grows by the archive too.
 - **Cross-compiling is more work.** One host cannot produce every archive
   without `cross`/zig (macOS targets need a Mac); wasm builds anywhere from

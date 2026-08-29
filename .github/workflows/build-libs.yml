@@ -68,36 +68,46 @@ jobs:
             cp include/anydoc.h staging/anydoc.h
             cp Cargo.lock staging/Cargo.lock 2>/dev/null || true
           fi
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: archives-${{ matrix.target }}
           path: staging
           if-no-files-found: error
 
-  # Windows archive, built with the MSVC toolchain on a native Windows runner
-  # (matching the WeKnora binding). MSVC cannot be redistributed, so neither
-  # cross nor zig can produce this target from Linux. The resulting COFF
-  # anydoc_go.lib is linked by the mingw gcc that Go's cgo uses.
+  # Windows archives, built with the MSVC toolchain on a native Windows
+  # runner (matching the WeKnora binding). MSVC cannot be redistributed, so
+  # neither cross nor zig can produce these targets from Linux. The resulting
+  # COFF anydoc_go.lib is linked by the mingw gcc that Go's cgo uses.
   build-windows:
-    name: Build windows (x86_64-pc-windows-msvc)
+    name: Build windows (${{ matrix.target }})
     runs-on: windows-2025
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-pc-windows-msvc
+            dir: windows_amd64
+          - target: aarch64-pc-windows-msvc
+            dir: windows_arm64
     steps:
       - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
       - uses: Swatinem/rust-cache@v2
         with:
-          key: anydoc-go-x86_64-pc-windows-msvc
+          key: anydoc-go-${{ matrix.target }}
       - name: Build archive
         shell: bash
-        run: TARGET=x86_64-pc-windows-msvc ./scripts/build-anydoc-lib.sh
+        run: TARGET=${{ matrix.target }} ./scripts/build-anydoc-lib.sh
       - name: Stage archive
         shell: bash
         run: |
           mkdir -p staging/lib
-          cp -R lib/windows_amd64 staging/lib/
-      - uses: actions/upload-artifact@v4
+          cp -R "lib/${{ matrix.dir }}" staging/lib/
+      - uses: actions/upload-artifact@v7
         with:
-          name: archives-x86_64-pc-windows-msvc
+          name: archives-${{ matrix.target }}
           path: staging
           if-no-files-found: error
 
@@ -130,7 +140,7 @@ jobs:
         run: |
           mkdir -p staging/lib
           cp -R "lib/${{ matrix.dir }}" staging/lib/
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: archives-${{ matrix.target }}
           path: staging
@@ -148,7 +158,7 @@ jobs:
         with:
           ref: ${{ github.event.inputs.branch }}
       - name: Download archives
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           pattern: archives-*
           path: staging

@@ -99,6 +99,6 @@ func isNeedsOcr(err error) bool {
 // matrix so the failure is self-explanatory.
 const unavailableDetail = "no prebuilt anydoc static library for this build: " +
 	"the module packages archives for linux/amd64, linux/arm64, darwin/amd64, " +
-	"darwin/arm64, and windows/amd64, and requires CGO_ENABLED=1. " +
+	"darwin/arm64, windows/amd64, and windows/arm64, and requires CGO_ENABLED=1. " +
 	"Build with cgo on one of these platforms, or build the archive from " +
 	"source for another target (see scripts/build-all.sh)."

@@ -1,3 +1,5 @@
+**[English documentation](README.md) · [中文文档](README.zh-CN.md)**
+
 # anydoc-go
 
 [anydoc](https://github.com/firecrawl/anydoc) 的 Go 语言绑定 —— anydoc 是一个
@@ -7,8 +9,6 @@ Rust 库，可将 Word、PowerPoint、Excel、OpenDocument、RTF、EPUB、CSV �
 anydoc-go 通过 cgo 以**静态库**的方式链接 anydoc，并在模块内为所有支持的平台
 打包了预编译的静态库。使用者**无需安装 Rust 或任何额外工具链**：`go get`
 即可拉取静态库，`go build` 直接完成链接。
-
-[English documentation](README.md)
 
 ## 环境要求
 
@@ -77,10 +77,12 @@ go run ./examples/parse   -file report.docx
 | darwin/amd64  | `x86_64-apple-darwin`       | clang（Xcode 命令行工具） |
 | darwin/arm64  | `aarch64-apple-darwin`      | clang（Xcode 命令行工具） |
 | windows/amd64 | `x86_64-pc-windows-msvc`    | mingw-w64 gcc             |
+| windows/arm64 | `aarch64-pc-windows-msvc`   | mingw-w64 gcc             |
 
 说明：
 
-- **Windows 使用 MSVC 目标**，与 WeKnora 绑定一致。静态库由 MSVC 工具链
+- **Windows 使用 MSVC 目标**（`x86_64-pc-windows-msvc` 与
+  `aarch64-pc-windows-msvc`），与 WeKnora 绑定一致。静态库由 MSVC 工具链
   构建（MSVC 不可再分发，因此只能在原生 Windows 主机或 CI 的 Windows
   运行器上构建），产物为 `anydoc_go.lib`。Go 的 cgo 仍然使用 mingw gcc
   链接 —— GNU ld 可以读取 MSVC 的 `.lib` 归档 —— 因此使用者只需要标准的
@@ -209,7 +211,7 @@ md, err := anydoc.ToMarkdownBytesWithOptions(pdf, &anydoc.FormatPdf, &anydoc.Opt
    `_free` 释放函数。构建脚本将 anydoc 内部私有的 `document_to_markdown`
    序列化器重新导出，从而保留官方 GFM 渲染能力。
 2. **每个平台一个静态库** —— `crate-type = ["staticlib"]` 构建出
-   `libanydoc_go.a`（约 30 MB）。五个静态库提交在 [lib/](lib/) 目录下。
+   `libanydoc_go.a`（约 20 MB）。六个静态库提交在 [lib/](lib/) 目录下。
 3. **带构建标签的平台文件** —— 每个平台一个 Go 文件（
    [lib_linux_amd64.go](lib_linux_amd64.go) 等），由
    `//go:build linux && amd64 && cgo` 选中，并在其中通过 `#cgo LDFLAGS`
@@ -219,7 +221,7 @@ md, err := anydoc.ToMarkdownBytesWithOptions(pdf, &anydoc.FormatPdf, &anydoc.Opt
    `//go:embed lib/linux_amd64/libanydoc_go.a` 嵌入其静态库。该指令使静态库
    成为**包的显式依赖**，`go mod vendor`、模块 zip 和 `go list` 都不会静默
    丢弃它。字节可通过 `EmbeddedLib()`/`ExtractLib()` 获取；不调用它们的
-   二进制文件没有任何开销 —— 链接器会剔除未引用的约 30 MB 数据。
+   二进制文件没有任何开销 —— 链接器会剔除未引用的约 20 MB 数据。
 5. **对用户友好的 Go API** —— [anydoc.go](anydoc.go) 把所有指针和释放调用
    隐藏在普通 Go 函数之后；ABI 调用期间锁定 goroutine（错误槽是线程局部的），
    并把文档缓冲区边界安全地解码为 Go 结构体。
@@ -247,11 +249,11 @@ if err != nil && anydoc.IsUnavailable(err) {
 `go mod vendor` 会一并复制静态库和 C 头文件：`//go:embed` 指令将其声明为
 包的依赖，因此使用 `-mod=vendor` 的构建依然有效 —— `#cgo LDFLAGS` 中的
 路径以 `${SRCDIR}` 为基准，在 vendor 目录内同样能正确解析。请在默认的
-cgo 开启环境下执行 `go mod vendor`：它会捕获全部五个 `lib/<platform>/`
+cgo 开启环境下执行 `go mod vendor`：它会捕获全部六个 `lib/<platform>/`
 目录（所有平台，而非仅当前主机）。以 `CGO_ENABLED=0` 执行 vendor 只捕获
 头文件 —— 兜底构建也只需要这些。
 
-注意模块体积：五个静态库合计约 150 MB，`go get` 会拉取较大的模块 zip
+注意模块体积：六个静态库合计约 120 MB，`go get` 会拉取较大的模块 zip
 （远低于代理的 500 MB 上限，但值得知晓）。如果注册表或带宽对此敏感，
 一次性 vendor 是常见做法。
 
@@ -287,7 +289,7 @@ Windows 静态库用 MSVC 工具链在原生 Windows 上构建（CI 使用 Windo
 
 **Build static libraries** 工作流
 （[.github/workflows/build-libs.yml](.github/workflows/build-libs.yml)）
-会构建全部五个静态库，先通过 Go 包实际链接并转换做冒烟测试，然后把产物
+会构建全部六个静态库，先通过 Go 包实际链接并转换做冒烟测试，然后把产物
 提交并推送到主分支：
 
 **Actions → “Build static libraries” → Run workflow。**
@@ -321,7 +323,7 @@ wasm 运行时中得不到任何好处。
 
 - **必须启用 cgo。**无法用于 `CGO_ENABLED=0` 的纯 Go 构建，每个平台都需要
   C 工具链；部分 PaaS/buildpack 场景和静态分析工具对 cgo 不友好。
-- **每个平台一份静态库。**五个文件 × 约 30 MB 存放在模块中；wasm 是单一
+- **每个平台一份静态库。**六个文件 × 约 20 MB 存放在模块中；wasm 是单一
   可移植产物。链接后的二进制也会增大相应体积。
 - **交叉编译更麻烦。**单台主机无法产出全部平台的静态库（macOS 目标必须
   在 Mac 上构建，其余依赖 cross/zig）；wasm 在任何地方都能构建出到处

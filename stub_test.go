@@ -1,4 +1,4 @@
-//go:build !cgo || !((linux && (amd64 || arm64)) || (darwin && (amd64 || arm64)) || (windows && amd64))
+//go:build !cgo || !((linux && (amd64 || arm64)) || (darwin && (amd64 || arm64)) || (windows && (amd64 || arm64)))
 
 package anydoc
 
