@@ -4,7 +4,7 @@ name: Build static libraries
 # them to the main branch. Trigger it manually (Actions → "Build static
 # libraries" → Run workflow) after changing the `anydoc = "=X.Y.Z"` pin in
 # Cargo.toml, after upgrading Rust tooling, or whenever the committed archives
-# fall out of date. The archives are ~30 MB each, so they are built on demand
+# fall out of date. The archives are ~20 MB each, so they are built on demand
 # rather than on every push.
 #
 # Platform split across runners: Linux builds on ubuntu (native + cross),
@@ -26,7 +26,7 @@ jobs:
   # Linux (glibc) archives. Linux/amd64 builds natively; Linux/arm64 uses
   # cross.
   build-linux:
-    name: Build (${{ matrix.target }})
+    name: Build linux (${{ matrix.target }})
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -177,8 +177,8 @@ jobs:
           python3 - <<'PYEOF'
           import pathlib, sys
           archives = sorted(pathlib.Path("lib").rglob("*.a")) + sorted(pathlib.Path("lib").rglob("*.lib"))
-          if len(archives) != 5:
-              sys.exit(f"error: expected 5 staged archives, found {len(archives)}: {archives}")
+          if len(archives) != 6:
+              sys.exit(f"error: expected 6 staged archives, found {len(archives)}: {archives}")
           for path in archives:
               data = path.read_bytes()
               if not data.startswith(b"!<arch>\n"):

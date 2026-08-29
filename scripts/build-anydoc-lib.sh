@@ -210,32 +210,85 @@ cp "target/$target/release/$lib_name" "$dest/$lib_name"
 # The header declares the ABI, so the archive must export every declared
 # function. A stale archive would otherwise surface only much later, as a Go
 # link failure in the workflow's smoke test; catch it here, next to the
-# artifact itself. Skipped where nm is unavailable (the Windows MSVC runner).
-if command -v nm >/dev/null 2>&1; then
-  # nm can exit non-zero on members it cannot read (for example when the
-  # toolchain's nm predates the LLVM that produced the archive); it still
-  # prints every symbol it managed to read. `|| true` keeps that partial
-  # success from tripping set -e; the symbol comparison below stays
-  # authoritative. An empty result fails loudly instead of silently.
-  symbols=$(nm -gU "$dest/$lib_name" 2>/dev/null) || true
-  exported=$(printf '%s\n' "$symbols" | awk '{print $NF}' | sed 's/^_//' | grep '^anydoc_' | grep -v ':$' | sort -u) || true
-  declared=$(grep -o '^[a-z_* ]*anydoc_[a-z_0-9]*(' include/anydoc.h | grep -o 'anydoc_[a-z_0-9]*' | sort -u) || true
-  if [ -z "$declared" ]; then
-    echo "error: no anydoc_* function declarations found in include/anydoc.h" >&2
-    exit 1
-  fi
-  missing=""
-  for sym in $declared; do
-    if ! printf '%s\n' "$exported" | grep -qx "$sym"; then
-      missing="$missing $sym"
+# artifact itself.
+#
+# Windows verifies with a minimal COFF scanner: the only nm on the runner is
+# x86_64 mingw-w64 nm, which cannot read the aarch64 MSVC archive (empty
+# output reads as "every symbol missing"). Everywhere else nm is used.
+case "$target" in
+  *pc-windows-msvc)
+    if command -v python3 >/dev/null 2>&1; then
+      python3 - "$dest/$lib_name" include/anydoc.h <<'PYEOF'
+import re, struct, sys
+path, header = sys.argv[1], sys.argv[2]
+declared = set()
+for line in open(header, encoding="utf-8", errors="replace"):
+    m = re.match(r"^[a-z_* ]*anydoc_[a-z_0-9]*\(", line)
+    if m:
+        declared.add(re.search(r"anydoc_[a-z_0-9]*", m.group(0)).group(0))
+data = open(path, "rb").read()
+found = set()
+pos = 8
+while pos < len(data):
+    if len(data) - pos < 60:
+        sys.exit(f"error: {path} has {len(data) - pos} stray bytes after the last member")
+    size = int(data[pos + 48:pos + 58].rstrip(b" "))
+    pos += 60
+    m = data[pos:pos + size]
+    pos += size + (size & 1)
+    if len(m) < 20:
+        continue
+    machine, _, _, symoff, nsyms, _, _ = struct.unpack_from("<HHIIIHH", m, 0)
+    if machine not in (0x8664, 0xAA64) or nsyms == 0 or symoff == 0:
+        continue
+    table = m[symoff:symoff + 18 * nsyms]
+    stroff = symoff + 18 * nsyms
+    for i in range(nsyms):
+        e = table[i * 18:(i + 1) * 18]
+        name, _, secnum, _, sclass, _ = struct.unpack("<8sIHHBB", e)
+        if sclass != 2 or secnum == 0:
+            continue
+        if name[:4] == b"\0\0\0\0":
+            so = struct.unpack("<I", name[4:8])[0]
+            nm = m[stroff + so:].split(b"\0", 1)[0]
+        else:
+            nm = name.split(b"\0", 1)[0]
+        found.add(nm.decode("utf-8", "replace"))
+missing = declared - found
+if missing:
+    sys.exit(f"error: {path} is missing declared ABI symbols: {sorted(missing)}")
+print(f"OK: {path} exports all {len(declared)} declared ABI symbols")
+PYEOF
     fi
-  done
-  if [ -n "$missing" ]; then
-    echo "error: $dest/$lib_name is missing declared ABI symbols:$missing" >&2
-    echo "The archive is stale or the rebuild was skipped; delete target/ and rebuild." >&2
-    exit 1
-  fi
-fi
+    ;;
+  *)
+    if command -v nm >/dev/null 2>&1; then
+      # nm can exit non-zero on members it cannot read (for example when the
+      # toolchain's nm predates the LLVM that produced the archive); it still
+      # prints every symbol it managed to read. `|| true` keeps that partial
+      # success from tripping set -e; the symbol comparison below stays
+      # authoritative. An empty result fails loudly instead of silently.
+      symbols=$(nm -gU "$dest/$lib_name" 2>/dev/null) || true
+      exported=$(printf '%s\n' "$symbols" | awk '{print $NF}' | sed 's/^_//' | grep '^anydoc_' | grep -v ':$' | sort -u) || true
+      declared=$(grep -o '^[a-z_* ]*anydoc_[a-z_0-9]*(' include/anydoc.h | grep -o 'anydoc_[a-z_0-9]*' | sort -u) || true
+      if [ -z "$declared" ]; then
+        echo "error: no anydoc_* function declarations found in include/anydoc.h" >&2
+        exit 1
+      fi
+      missing=""
+      for sym in $declared; do
+        if ! printf '%s\n' "$exported" | grep -qx "$sym"; then
+          missing="$missing $sym"
+        fi
+      done
+      if [ -n "$missing" ]; then
+        echo "error: $dest/$lib_name is missing declared ABI symbols:$missing" >&2
+        echo "The archive is stale or the rebuild was skipped; delete target/ and rebuild." >&2
+        exit 1
+      fi
+    fi
+    ;;
+esac
 
 # The archive must end exactly at its last member. A duplicated or appended
 # tail (seen once already: CI artifact-merge corruption) parses as garbage
