@@ -224,7 +224,10 @@ jobs:
           version=$(sed -n 's/^anydoc = "=\([^"]*\)".*/\1/p' Cargo.toml | head -1)
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          if git diff --quiet && git diff --cached --quiet; then
+          # git diff cannot see untracked files, and a newly added platform
+          # (lib/windows_arm64) arrives exactly as an untracked directory —
+          # the porcelain status covers both modified and untracked paths.
+          if [ -z "$(git status --porcelain lib include/anydoc.h Cargo.lock)" ]; then
             echo "No changes; the committed archives are already current."
             exit 0
           fi
