@@ -1,4 +1,4 @@
-**[English documentation](README.md) · [中文文档](README.zh-CN.md)**
+**[English](README.md) · 中文文档**
 
 # anydoc-go
 

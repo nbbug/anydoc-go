@@ -1,4 +1,4 @@
-**[English](README.md) · [中文文档](README.zh-CN.md)**
+**English · [中文文档](README.zh-CN.md)**
 
 # anydoc-go
 
@@ -72,14 +72,14 @@ compiler selects the right one automatically with build tags. Each archive is
 a single file under `lib/<platform>/`: `libanydoc_go.a` everywhere except
 Windows, which ships the MSVC COFF archive `anydoc_go.lib`.
 
-| Platform      | Rust target                  | C toolchain used for linking |
-| ------------- | ---------------------------- | ---------------------------- |
-| linux/amd64   | `x86_64-unknown-linux-gnu`   | gcc                          |
-| linux/arm64   | `aarch64-unknown-linux-gnu`  | gcc (aarch64)                |
-| darwin/amd64  | `x86_64-apple-darwin`        | clang (Xcode CLT)            |
-| darwin/arm64  | `aarch64-apple-darwin`       | clang (Xcode CLT)            |
-| windows/amd64 | `x86_64-pc-windows-msvc`     | mingw-w64 gcc                |
-| windows/arm64 | `aarch64-pc-windows-msvc`    | mingw-w64 gcc                |
+| Platform      | Rust target                 | C toolchain used for linking |
+| ------------- | --------------------------- | ---------------------------- |
+| linux/amd64   | `x86_64-unknown-linux-gnu`  | gcc                          |
+| linux/arm64   | `aarch64-unknown-linux-gnu` | gcc (aarch64)                |
+| darwin/amd64  | `x86_64-apple-darwin`       | clang (Xcode CLT)            |
+| darwin/arm64  | `aarch64-apple-darwin`      | clang (Xcode CLT)            |
+| windows/amd64 | `x86_64-pc-windows-msvc`    | mingw-w64 gcc                |
+| windows/arm64 | `aarch64-pc-windows-msvc`   | mingw-w64 gcc                |
 
 Notes:
 
