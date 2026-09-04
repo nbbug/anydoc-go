@@ -213,8 +213,8 @@ mkdir -p "$dest"
 
 # DYLIB=1 packages the cdylib output instead of the static archive (the Build
 # dynamic libraries workflow). The shared library is not embedded in the Go
-# module: `dynamic`-tag builds locate it through the cgo search path after the
-# user downloads it from the GitHub release.
+# module: `anydoc_dynamic`-tag builds locate it through the cgo search path
+# after the user downloads it from the GitHub release.
 if [ "${DYLIB:-}" = "1" ]; then
   case "$target" in
     *pc-windows-msvc)

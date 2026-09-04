@@ -47,7 +47,9 @@ jobs:
       - name: Package
         run: |
           mkdir -p "pkg/lib/${{ matrix.dir }}"
-          cp "lib/${{ matrix.dir }}"/* "pkg/lib/${{ matrix.dir }}/"
+          # Only the shared library: the checkout's lib/ dir also contains
+          # the committed static archives, which must not ride along.
+          cp "lib/${{ matrix.dir }}"/libanydoc_go.so "pkg/lib/${{ matrix.dir }}/"
           cp include/anydoc.h pkg/
           tar -czf "anydoc-dynlib-${{ matrix.dir }}.tar.gz" -C pkg .
       - uses: actions/upload-artifact@v7
@@ -82,7 +84,11 @@ jobs:
         shell: bash
         run: |
           mkdir -p "pkg/lib/${{ matrix.dir }}"
-          cp "lib/${{ matrix.dir }}"/* "pkg/lib/${{ matrix.dir }}/"
+          # Only the shared library: the checkout's lib/ dir also contains
+          # the committed static archives, which must not ride along. GNU ld
+          # reads the .dll's export table directly, so the MSVC import
+          # library is not needed for cgo linking either.
+          cp "lib/${{ matrix.dir }}"/anydoc_go.dll "pkg/lib/${{ matrix.dir }}/"
           cp include/anydoc.h pkg/
           tar -czf "anydoc-dynlib-${{ matrix.dir }}.tar.gz" -C pkg .
       - uses: actions/upload-artifact@v7
@@ -115,7 +121,9 @@ jobs:
       - name: Package
         run: |
           mkdir -p "pkg/lib/${{ matrix.dir }}"
-          cp "lib/${{ matrix.dir }}"/* "pkg/lib/${{ matrix.dir }}/"
+          # Only the shared library: the checkout's lib/ dir also contains
+          # the committed static archives, which must not ride along.
+          cp "lib/${{ matrix.dir }}"/libanydoc_go.dylib "pkg/lib/${{ matrix.dir }}/"
           cp include/anydoc.h pkg/
           tar -czf "anydoc-dynlib-${{ matrix.dir }}.tar.gz" -C pkg .
       - uses: actions/upload-artifact@v7
