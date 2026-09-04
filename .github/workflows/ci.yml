@@ -40,6 +40,13 @@ jobs:
           CGO_ENABLED=0 go vet ./...
           CGO_ENABLED=0 go test ./...
 
+      # The `dynamic` tag must keep compiling: vet does not link, so it needs
+      # only the committed header, not the downloaded shared libraries.
+      - name: Vet with the dynamic tag (no link)
+        run: |
+          go vet -tags dynamic ./...
+          CGO_ENABLED=0 go vet -tags dynamic ./...
+
       # Full cgo tests link the packaged archive. Skip until the archives have
       # been pushed to main by the "Build static libraries" workflow — before
       # the first run, lib/ is empty and go:embed cannot resolve.

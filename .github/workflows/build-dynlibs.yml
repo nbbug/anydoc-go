@@ -1,0 +1,143 @@
+name: Build dynamic libraries
+
+# Builds the anydoc shared libraries (cdylib) for every supported platform
+# and uploads them, plus the C header, to a GitHub release. Consumers who
+# build the Go module with `-tags dynamic` download these archives; the
+# module itself ships only the static archives, which remain the default.
+# Trigger it manually (Actions → "Build dynamic libraries" → Run workflow)
+# after changing the `anydoc = "=X.Y.Z"` pin or the C ABI.
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: "Git tag of the release to create or update"
+        required: false
+        default: "dynlib-v0.2.4"
+
+permissions:
+  contents: write
+
+jobs:
+  build-linux:
+    name: Build linux (${{ matrix.target }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            tool: cargo
+            dir: linux_amd64
+          - target: aarch64-unknown-linux-gnu
+            tool: cross
+            dir: linux_arm64
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: anydoc-go-${{ matrix.target }}
+      - uses: taiki-e/install-action@v2
+        if: matrix.tool == 'cross'
+        with:
+          tool: cross
+      - name: Build shared library
+        run: DYLIB=1 BUILD_TOOL=${{ matrix.tool }} TARGET=${{ matrix.target }} ./scripts/build-anydoc-lib.sh
+      - name: Package
+        run: |
+          mkdir -p "pkg/${{ matrix.dir }}"
+          cp "lib/${{ matrix.dir }}"/* "pkg/${{ matrix.dir }}/"
+          cp include/anydoc.h pkg/
+          tar -czf "anydoc-dynlib-${{ matrix.dir }}.tar.gz" -C pkg .
+      - uses: actions/upload-artifact@v7
+        with:
+          name: dynlib-${{ matrix.dir }}
+          path: anydoc-dynlib-${{ matrix.dir }}.tar.gz
+          if-no-files-found: error
+
+  build-windows:
+    name: Build windows (${{ matrix.target }})
+    runs-on: windows-2025
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-pc-windows-msvc
+            dir: windows_amd64
+          - target: aarch64-pc-windows-msvc
+            dir: windows_arm64
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: anydoc-go-${{ matrix.target }}
+      - name: Build shared library
+        shell: bash
+        run: DYLIB=1 TARGET=${{ matrix.target }} ./scripts/build-anydoc-lib.sh
+      - name: Package
+        shell: bash
+        run: |
+          mkdir -p "pkg/${{ matrix.dir }}"
+          cp "lib/${{ matrix.dir }}"/* "pkg/${{ matrix.dir }}/"
+          cp include/anydoc.h pkg/
+          tar -czf "anydoc-dynlib-${{ matrix.dir }}.tar.gz" -C pkg .
+      - uses: actions/upload-artifact@v7
+        with:
+          name: dynlib-${{ matrix.dir }}
+          path: anydoc-dynlib-${{ matrix.dir }}.tar.gz
+          if-no-files-found: error
+
+  build-darwin:
+    name: Build darwin (${{ matrix.target }})
+    runs-on: macos-14
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: aarch64-apple-darwin
+            dir: darwin_arm64
+          - target: x86_64-apple-darwin
+            dir: darwin_amd64
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: anydoc-go-${{ matrix.target }}
+      - name: Build shared library
+        run: DYLIB=1 TARGET=${{ matrix.target }} ./scripts/build-anydoc-lib.sh
+      - name: Package
+        run: |
+          mkdir -p "pkg/${{ matrix.dir }}"
+          cp "lib/${{ matrix.dir }}"/* "pkg/${{ matrix.dir }}/"
+          cp include/anydoc.h pkg/
+          tar -czf "anydoc-dynlib-${{ matrix.dir }}.tar.gz" -C pkg .
+      - uses: actions/upload-artifact@v7
+        with:
+          name: dynlib-${{ matrix.dir }}
+          path: anydoc-dynlib-${{ matrix.dir }}.tar.gz
+          if-no-files-found: error
+
+  release:
+    name: Create release
+    needs: [build-linux, build-windows, build-darwin]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download packages
+        uses: actions/download-artifact@v8
+        with:
+          pattern: dynlib-*
+          path: staging
+          merge-multiple: true
+      - name: Upload to release
+        uses: softprops/action-gh-release@v3
+        with:
+          tag_name: ${{ github.event.inputs.release_tag }}
+          files: staging/*.tar.gz
+          generate_release_notes: true

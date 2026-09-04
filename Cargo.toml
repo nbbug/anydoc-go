@@ -1,8 +1,10 @@
 # Go bindings for anydoc.
 #
-# `crate-type = ["staticlib"]` produces libanydoc_go.a, which the Go module
-# links at build time via cgo. Not a cdylib: cgo wants an archive it can pull
-# symbols from, not a loadable shared object.
+# `crate-type = ["staticlib", "cdylib"]`: the Go module links the static
+# archive by default; the cdylib output powers the opt-in dynamic-library
+# build (see the Build dynamic libraries workflow and the `dynamic` build
+# tag). Not a plain cdylib: cgo wants either an archive it can pull symbols
+# from or an import library for a dylib.
 [package]
 name = "anydoc-go"
 version = "0.2.4"
@@ -14,7 +16,7 @@ repository = "https://github.com/firecrawl/anydoc"
 publish = false
 
 [lib]
-crate-type = ["staticlib"]
+crate-type = ["staticlib", "cdylib"]
 
 # Standalone crate: it lives outside the anydoc workspace, so it takes the
 # published crate rather than a path dependency.

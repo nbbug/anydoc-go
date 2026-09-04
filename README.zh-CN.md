@@ -228,10 +228,11 @@ md, err := anydoc.ToMarkdownBytesWithOptions(pdf, &anydoc.FormatPdf, &anydoc.Opt
 
 ## 构建标签与兜底实现
 
-| 构建方式                         | 参与编译的文件                    | 行为                                              |
-| -------------------------------- | --------------------------------- | ------------------------------------------------- |
-| cgo + 受支持平台                 | 平台文件 + [anydoc.go](anydoc.go) | 链接静态库，功能完整                              |
-| `CGO_ENABLED=0` 或不受支持的平台 | [anydoc_stub.go](anydoc_stub.go)  | 可编译；所有函数返回提示明确的 `UnavailableError` |
+| 构建方式                                       | 参与编译的文件                        | 行为                                              |
+| ---------------------------------------------- | ------------------------------------- | ------------------------------------------------- |
+| cgo + 受支持平台                               | 平台文件 + [anydoc.go](anydoc.go)     | 链接静态库，功能完整                              |
+| cgo + 受支持平台 + `-tags dynamic`             | 动态平台文件 + [anydoc.go](anydoc.go) | 链接从 release 下载的共享库                       |
+| `CGO_ENABLED=0` 或不受支持的平台               | [anydoc_stub.go](anydoc_stub.go)      | 可编译；所有函数返回提示明确的 `UnavailableError` |
 
 ```go
 md, err := anydoc.ToMarkdownBytes(data, nil)
@@ -255,7 +256,38 @@ cgo 开启环境下执行 `go mod vendor`：它会捕获全部六个 `lib/<platf
 
 注意模块体积：六个静态库合计约 120 MB，`go get` 会拉取较大的模块 zip
 （远低于代理的 500 MB 上限，但值得知晓）。如果注册表或带宽对此敏感，
-一次性 vendor 是常见做法。
+一次性 vendor 是常见做法 —— 或者参考下面的动态库方案。
+
+## 动态库（可选）
+
+默认情况下模块链接内嵌的静态归档。使用 `dynamic` 构建标签则改为链接
+共享库：
+
+```
+go build -tags dynamic ./...
+```
+
+模块本身不打包任何动态库 —— 共享库由 **Build dynamic libraries** 工作流
+构建，发布到 [releases 页面](https://github.com/nbbug/anydoc-go/releases)，
+每个平台一个 `anydoc-dynlib-<platform>.tar.gz`（共享库 + C 头文件）。下载
+对应平台的包，让它进入 cgo 的搜索路径：
+
+- 解压到任意目录，构建时用 `CGO_LDFLAGS` 指定平台目录（cgo 会把这些
+  flags 追加到包自身 flags 之后）：
+  ```
+  tar -xzf anydoc-dynlib-darwin_arm64.tar.gz -C ~/anydoc-dynlib
+  CGO_LDFLAGS="-L$HOME/anydoc-dynlib/darwin_arm64" go build -tags dynamic ./...
+  ```
+- 或者 vendor 模块（`go mod vendor`），把解压出的文件放进
+  `vendor/github.com/nbbug/anydoc-go/dynlib/<platform>/`；动态平台文件
+  本身就搜索 `${SRCDIR}/dynlib/<platform>`。
+
+运行时操作系统要能找到库：Linux 设置 `LD_LIBRARY_PATH`、macOS 设置
+`DYLD_LIBRARY_PATH`，Windows 把 DLL 放在可执行文件旁或加入 `PATH`。
+
+取舍：动态构建让二进制更小、多个二进制可共享一份库，但部署时必须携带
+库文件，且二进制的质量取决于你下载的库。除非模块体积成为瓶颈，否则
+保持默认的静态链接。
 
 ## 从源码构建静态库
 

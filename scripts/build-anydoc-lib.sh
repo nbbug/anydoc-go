@@ -12,6 +12,7 @@
 #   TARGET=aarch64-unknown-linux-gnu scripts/build-anydoc-lib.sh
 #   TARGET=... BUILD_TOOL=cross scripts/build-anydoc-lib.sh    # cross (Docker)
 #   TARGET=... BUILD_TOOL=zigbuild scripts/build-anydoc-lib.sh # cargo-zigbuild
+#   DYLIB=1 TARGET=... ...                     # package the cdylib output
 #
 # BUILD_TOOL selects the Rust build driver:
 #   cargo    (default) plain cargo; the target must be installed and linkable
@@ -199,12 +200,38 @@ export RUSTFLAGS="${RUSTFLAGS:-} $rustflags"
 # archive so a skipped relink fails the copy below instead of shipping stale
 # bytes.
 touch src/lib.rs
-rm -f "target/$target/release/$lib_name"
+rm -f "target/$target/release/$lib_name" \
+  "target/$target/release/libanydoc_go.so" \
+  "target/$target/release/libanydoc_go.dylib" \
+  "target/$target/release/anydoc_go.dll" \
+  "target/$target/release/anydoc_go.dll.lib"
 
 "$build_tool" build --release $locked --target "$target"
 
 dest="lib/$lib_dir"
 mkdir -p "$dest"
+
+# DYLIB=1 packages the cdylib output instead of the static archive (the Build
+# dynamic libraries workflow). The shared library is not embedded in the Go
+# module: `dynamic`-tag builds locate it through the cgo search path after the
+# user downloads it from the GitHub release.
+if [ "${DYLIB:-}" = "1" ]; then
+  case "$target" in
+    *pc-windows-msvc)
+      cp "target/$target/release/anydoc_go.dll" "$dest/anydoc_go.dll"
+      cp "target/$target/release/anydoc_go.dll.lib" "$dest/anydoc_go.dll.lib"
+      ;;
+    *apple-darwin)
+      cp "target/$target/release/libanydoc_go.dylib" "$dest/libanydoc_go.dylib"
+      ;;
+    *)
+      cp "target/$target/release/libanydoc_go.so" "$dest/libanydoc_go.so"
+      ;;
+  esac
+  echo "Wrote $dest (dynamic)"
+  exit 0
+fi
+
 cp "target/$target/release/$lib_name" "$dest/$lib_name"
 
 # The header declares the ABI, so the archive must export every declared

@@ -243,10 +243,11 @@ conversion (and on the machine, except for `OcrHosted`).
 
 ## Build tags and the stub
 
-| Build                                   | Files compiled                         | Behavior                                                      |
-| --------------------------------------- | -------------------------------------- | ------------------------------------------------------------- |
-| cgo, supported platform                 | platform file + [anydoc.go](anydoc.go) | links the archive, full functionality                         |
-| `CGO_ENABLED=0` or unsupported platform | [anydoc_stub.go](anydoc_stub.go)       | compiles; every function returns a helpful `UnavailableError` |
+| Build                                                     | Files compiled                             | Behavior                                                      |
+| --------------------------------------------------------- | ------------------------------------------ | ------------------------------------------------------------- |
+| cgo, supported platform                                   | platform file + [anydoc.go](anydoc.go)     | links the archive, full functionality                         |
+| cgo, supported platform, `-tags dynamic`                  | dynamic platform file + [anydoc.go](anydoc.go) | links the shared library downloaded from the release       |
+| `CGO_ENABLED=0` or unsupported platform                   | [anydoc_stub.go](anydoc_stub.go)           | compiles; every function returns a helpful `UnavailableError` |
 
 ```go
 md, err := anydoc.ToMarkdownBytes(data, nil)
@@ -272,7 +273,42 @@ only the header — which is all a stub build needs.
 Mind the module size: the six archives total ~120 MB, so a `go get` pulls a
 large module zip (well under proxy limits, but worth knowing). If your
 registry or bandwidth makes that uncomfortable, vendoring once is the usual
-answer.
+answer — or see the dynamic-library option below.
+
+## Dynamic libraries (opt-in)
+
+By default the module links the embedded static archive. Building with the
+`dynamic` build tag links a shared library instead:
+
+```
+go build -tags dynamic ./...
+```
+
+Nothing dynamic is embedded in the module — the shared libraries are built
+by the **Build dynamic libraries** workflow and published on the
+[releases page](https://github.com/nbbug/anydoc-go/releases) as
+`anydoc-dynlib-<platform>.tar.gz` (six archives: the shared library plus the
+C header for each platform). Download the one for your platform and make it
+reachable through the cgo search path:
+
+- Extract it anywhere and pass the platform directory through
+  `CGO_LDFLAGS` (cgo appends these flags after the package's own):
+  ```
+  tar -xzf anydoc-dynlib-darwin_arm64.tar.gz -C ~/anydoc-dynlib
+  CGO_LDFLAGS="-L$HOME/anydoc-dynlib/darwin_arm64" go build -tags dynamic ./...
+  ```
+- Or vendor the module (`go mod vendor`) and drop the extracted files into
+  `vendor/github.com/nbbug/anydoc-go/dynlib/<platform>/`; the dynamic
+  platform files already search `${SRCDIR}/dynlib/<platform>`.
+
+At run time the OS must be able to load the library: set
+`LD_LIBRARY_PATH` (Linux) or `DYLD_LIBRARY_PATH` (macOS) to the platform
+directory, and on Windows place the DLL next to the executable or on `PATH`.
+
+Trade-offs: dynamic builds keep the binary small and let several binaries
+share one library, but the deployment must carry the library alongside, and
+the binary is only as good as the library you downloaded. Prefer the static
+default unless module size is the bottleneck.
 
 ## Building the archives from source
 

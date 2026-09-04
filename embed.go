@@ -1,4 +1,4 @@
-//go:build cgo && ((linux && (amd64 || arm64)) || (darwin && (amd64 || arm64)) || (windows && amd64))
+//go:build !dynamic && cgo && ((linux && (amd64 || arm64)) || (darwin && (amd64 || arm64)) || (windows && (amd64 || arm64)))
 
 package anydoc
 
@@ -18,7 +18,7 @@ import (
 // cgo LDFLAGS in the platform-specific files; this accessor exists for
 // diagnostics, redistribution audits, and tooling that wants the archive on
 // disk. Callers that never call it pay nothing: the linker eliminates the
-// unreferenced ~30 MB of bytes from the final binary.
+// unreferenced ~20 MB of bytes from the final binary.
 func EmbeddedLib() []byte {
 	return embeddedLib
 }
