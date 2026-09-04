@@ -1,4 +1,4 @@
-//go:build dynamic && cgo && ((linux && (amd64 || arm64)) || (darwin && (amd64 || arm64)) || (windows && (amd64 || arm64)))
+//go:build anydoc_dynamic && cgo && ((linux && (amd64 || arm64)) || (darwin && (amd64 || arm64)) || (windows && (amd64 || arm64)))
 
 package anydoc
 
@@ -13,7 +13,7 @@ func EmbeddedLib() []byte {
 
 // ExtractLib has nothing to extract in dynamic builds.
 func ExtractLib(dir string) (string, error) {
-	return "", &UnavailableError{Reason: "dynamic build: nothing is embedded; " +
+	return "", &UnavailableError{Reason: "anydoc_dynamic build: nothing is embedded; " +
 		"download the shared library for your platform from the GitHub release " +
 		"and see the README's dynamic-library section"}
 }

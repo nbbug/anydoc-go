@@ -1,4 +1,4 @@
-//go:build darwin && arm64 && cgo && !dynamic
+//go:build darwin && arm64 && cgo && !anydoc_dynamic
 
 package anydoc
 

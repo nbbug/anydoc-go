@@ -1,4 +1,4 @@
-//go:build linux && arm64 && cgo && !dynamic
+//go:build linux && arm64 && cgo && !anydoc_dynamic
 
 package anydoc
 

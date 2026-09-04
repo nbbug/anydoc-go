@@ -1,4 +1,4 @@
-//go:build dynamic && darwin && amd64 && cgo
+//go:build anydoc_dynamic && darwin && amd64 && cgo
 
 package anydoc
 

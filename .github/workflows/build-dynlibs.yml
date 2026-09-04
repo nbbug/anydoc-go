@@ -2,7 +2,7 @@ name: Build dynamic libraries
 
 # Builds the anydoc shared libraries (cdylib) for every supported platform
 # and uploads them, plus the C header, to a GitHub release. Consumers who
-# build the Go module with `-tags dynamic` download these archives; the
+# build the Go module with `-tags anydoc_dynamic` download these archives; the
 # module itself ships only the static archives, which remain the default.
 # Trigger it manually (Actions → "Build dynamic libraries" → Run workflow)
 # after changing the `anydoc = "=X.Y.Z"` pin or the C ABI.
@@ -46,8 +46,8 @@ jobs:
         run: DYLIB=1 BUILD_TOOL=${{ matrix.tool }} TARGET=${{ matrix.target }} ./scripts/build-anydoc-lib.sh
       - name: Package
         run: |
-          mkdir -p "pkg/${{ matrix.dir }}"
-          cp "lib/${{ matrix.dir }}"/* "pkg/${{ matrix.dir }}/"
+          mkdir -p "pkg/lib/${{ matrix.dir }}"
+          cp "lib/${{ matrix.dir }}"/* "pkg/lib/${{ matrix.dir }}/"
           cp include/anydoc.h pkg/
           tar -czf "anydoc-dynlib-${{ matrix.dir }}.tar.gz" -C pkg .
       - uses: actions/upload-artifact@v7
@@ -81,8 +81,8 @@ jobs:
       - name: Package
         shell: bash
         run: |
-          mkdir -p "pkg/${{ matrix.dir }}"
-          cp "lib/${{ matrix.dir }}"/* "pkg/${{ matrix.dir }}/"
+          mkdir -p "pkg/lib/${{ matrix.dir }}"
+          cp "lib/${{ matrix.dir }}"/* "pkg/lib/${{ matrix.dir }}/"
           cp include/anydoc.h pkg/
           tar -czf "anydoc-dynlib-${{ matrix.dir }}.tar.gz" -C pkg .
       - uses: actions/upload-artifact@v7
@@ -114,8 +114,8 @@ jobs:
         run: DYLIB=1 TARGET=${{ matrix.target }} ./scripts/build-anydoc-lib.sh
       - name: Package
         run: |
-          mkdir -p "pkg/${{ matrix.dir }}"
-          cp "lib/${{ matrix.dir }}"/* "pkg/${{ matrix.dir }}/"
+          mkdir -p "pkg/lib/${{ matrix.dir }}"
+          cp "lib/${{ matrix.dir }}"/* "pkg/lib/${{ matrix.dir }}/"
           cp include/anydoc.h pkg/
           tar -czf "anydoc-dynlib-${{ matrix.dir }}.tar.gz" -C pkg .
       - uses: actions/upload-artifact@v7

@@ -1,4 +1,4 @@
-//go:build !dynamic && cgo && ((linux && (amd64 || arm64)) || (darwin && (amd64 || arm64)) || (windows && (amd64 || arm64)))
+//go:build !anydoc_dynamic && cgo && ((linux && (amd64 || arm64)) || (darwin && (amd64 || arm64)) || (windows && (amd64 || arm64)))
 
 package anydoc
 

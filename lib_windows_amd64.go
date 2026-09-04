@@ -1,4 +1,4 @@
-//go:build windows && amd64 && cgo && !dynamic
+//go:build windows && amd64 && cgo && !anydoc_dynamic
 
 package anydoc
 

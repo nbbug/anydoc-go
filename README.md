@@ -246,7 +246,7 @@ conversion (and on the machine, except for `OcrHosted`).
 | Build                                                     | Files compiled                             | Behavior                                                      |
 | --------------------------------------------------------- | ------------------------------------------ | ------------------------------------------------------------- |
 | cgo, supported platform                                   | platform file + [anydoc.go](anydoc.go)     | links the archive, full functionality                         |
-| cgo, supported platform, `-tags dynamic`                  | dynamic platform file + [anydoc.go](anydoc.go) | links the shared library downloaded from the release       |
+| cgo, supported platform, `-tags anydoc_dynamic`                  | dynamic platform file + [anydoc.go](anydoc.go) | links the shared library downloaded from the release       |
 | `CGO_ENABLED=0` or unsupported platform                   | [anydoc_stub.go](anydoc_stub.go)           | compiles; every function returns a helpful `UnavailableError` |
 
 ```go
@@ -278,26 +278,27 @@ answer — or see the dynamic-library option below.
 ## Dynamic libraries (opt-in)
 
 By default the module links the embedded static archive. Building with the
-`dynamic` build tag links a shared library instead:
+`anydoc_dynamic` build tag links a shared library instead:
 
 ```
-go build -tags dynamic ./...
+go build -tags anydoc_dynamic ./...
 ```
 
 Nothing dynamic is embedded in the module — the shared libraries are built
 by the **Build dynamic libraries** workflow and published on the
 [releases page](https://github.com/nbbug/anydoc-go/releases) as
-`anydoc-dynlib-<platform>.tar.gz` (six archives: the shared library plus the
-C header for each platform). Download the one for your platform and make it
-reachable through the cgo search path:
+`anydoc-dynlib-<platform>.tar.gz` (six archives, each laying out
+`lib/<platform>/<shared library>` plus the C header). Download the one for
+your platform and make it reachable through the cgo search path:
 
-- Extract it anywhere and pass the platform directory through
+- Extract it into a `lib` directory and pass the platform directory through
   `CGO_LDFLAGS` (cgo appends these flags after the package's own):
   ```
-  tar -xzf anydoc-dynlib-darwin_arm64.tar.gz -C ~/anydoc-dynlib
-  CGO_LDFLAGS="-L$HOME/anydoc-dynlib/darwin_arm64" go build -tags dynamic ./...
+  tar -xzf anydoc-dynlib-darwin_arm64.tar.gz
+  CGO_LDFLAGS="-L$(pwd)/lib/darwin_arm64" go build -tags anydoc_dynamic ./...
   ```
-- Or vendor the module (`go mod vendor`) and drop the extracted files into
+- Or vendor the module (`go mod vendor`) and copy the extracted
+  `lib/<platform>/` files into
   `vendor/github.com/nbbug/anydoc-go/dynlib/<platform>/`; the dynamic
   platform files already search `${SRCDIR}/dynlib/<platform>`.
 
