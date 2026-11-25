@@ -25,14 +25,20 @@
 #   scripts/strip-llvm-lto.sh <archive>          strip in place
 #   scripts/strip-llvm-lto.sh --check <archive>  verify only, change nothing
 #
-# The archive format decides the transform:
-#   ELF/COFF  objcopy --remove-section per member, then re-archive
-#   Mach-O    ld -r per member (the Apple linker drops the __LLVM segment)
+# Every format is rewritten member by member with llvm-style objcopy:
+#   ELF/COFF  objcopy --remove-section=.llvmbc ... then re-archive
+#   Mach-O    llvm-objcopy --remove-section=__LLVM,__bitcode ...
 #
-# So ELF/COFF archives need objcopy + objdump + ar, and Mach-O archives need
-# the Apple linker and otool. The Rust `llvm-tools` component is preferred for
-# the binutils: it reads every Rust target, so one Linux host can strip an
-# arm64 archive (a host-binutils objcopy usually cannot). TOOL_PREFIX selects a
+# Mach-O keeps the bitcode in the __LLVM segment. The Apple linker only drops
+# that segment from `ld -r` output when it is a segment of its own; rustc's
+# objects keep it inside the object segment, and newer Xcode linkers preserve
+# it there, so the object has to be rewritten directly instead of relinked.
+#
+# Tools: objcopy for the rewrite, objdump to name ELF/COFF sections, ar to
+# unpack and repack the archive, and Apple's otool (in the Xcode command line
+# tools) to name Mach-O sections. Prefer objcopy/objdump/ar from the Rust
+# `llvm-tools` component: unlike a host binutils they read every Rust target and
+# format, so one Linux host can strip an arm64 archive. TOOL_PREFIX selects a
 # cross binutils instead, e.g. TOOL_PREFIX=aarch64-linux-gnu-.
 set -euo pipefail
 
@@ -56,20 +62,23 @@ archive=$(cd "$(dirname "$1")" && pwd)/$(basename "$1")
 # ---------------------------------------------------------------------------
 
 sysroot=""
-host_triple=""
 if command -v rustc >/dev/null 2>&1; then
-  host_triple=$(rustc -vV 2>/dev/null | sed -n 's/^host: //p' || true)
-  sysroot=$(rustc --print sysroot 2>/dev/null || true)
+  sysroot=$(rustc --print sysroot 2>/dev/null | tr -d '\r' || true)
+  # rustc prints a Win32 path (C:\\...) on Windows; Git Bash's test -x wants
+  # the POSIX form.
+  if [ -n "$sysroot" ] && command -v cygpath >/dev/null 2>&1; then
+    sysroot=$(cygpath -u "$sysroot" 2>/dev/null || printf '%s' "$sysroot")
+  fi
 fi
 
 # rustup_tool NAME: a binary installed by the llvm-tools component, if any.
-# These read objects for every target, unlike a host binutils.
+# These read objects for every target and format, unlike a host binutils. The
+# host directory is globbed rather than rebuilt from `rustc -vV`, so a stray
+# CR or an unexpected triple cannot hide the tools.
 rustup_tool() {
   local name=$1 cand
-  [ -n "$sysroot" ] && [ -n "$host_triple" ] || return 1
-  for cand in \
-    "$sysroot/lib/rustlib/$host_triple/bin/$name" \
-    "$sysroot/lib/rustlib/$host_triple/bin/$name.exe"; do
+  [ -n "$sysroot" ] || return 1
+  for cand in "$sysroot"/lib/rustlib/*/bin/"$name" "$sysroot"/lib/rustlib/*/bin/"$name.exe"; do
     if [ -x "$cand" ]; then
       printf '%s\n' "$cand"
       return 0
@@ -92,14 +101,19 @@ for candidate in llvm-ar "${TOOL_PREFIX:-}ar" ar; do
 done
 [ -n "$ar" ] || die "no ar/llvm-ar found; install binutils or run 'rustup component add llvm-tools'"
 
-work=$(mktemp -d "${TMPDIR:-/tmp}/anydoc-lto.XXXXXX")
+work=$(mktemp -d "${TMPDIR:-/tmp}/anydoc-lto.XXXXXX" 2>/dev/null ||
+  mktemp -d 2>/dev/null || true)
+[ -n "$work" ] && [ -d "$work" ] || die "cannot create a temporary directory"
 trap 'rm -rf "$work"' EXIT
 
 # ---------------------------------------------------------------------------
 # Format detection: sniff the first member, not the host OS
 # ---------------------------------------------------------------------------
 
-"$ar" t "$archive" >"$work/members.all" 2>"$work/members.err" ||
+# Tool output is CR-stripped throughout: Windows archivers and llvm-objdump
+# emit CRLF, and a stray CR would turn member names and section names into
+# lookups that silently match nothing.
+"$ar" t "$archive" 2>"$work/members.err" | tr -d '\r' >"$work/members.all" ||
   die "cannot list the members of $archive: $(cat "$work/members.err")"
 [ -s "$work/members.all" ] ||
   die "$ar listed no members of $archive; it may be the wrong archiver for this format (install llvm-tools, or set TOOL_PREFIX)"
@@ -120,7 +134,29 @@ probe_member=$(awk 'NR==1' "$work/members")
   die "cannot read member '$probe_member' from $archive"
 [ -s "$work/probe" ] || die "member '$probe_member' in $archive is empty"
 
-magic=$(od -An -tx1 -N4 "$work/probe" | tr -d ' \n')
+# hex_bytes FILE N / u16_le FILE: read the leading bytes without assuming a
+# full coreutils install (Git Bash on Windows does not always ship od).
+hex_bytes() {
+  if command -v od >/dev/null 2>&1; then
+    od -An -tx1 -N"$2" "$1" | tr -d ' \n'
+  elif command -v python3 >/dev/null 2>&1; then
+    python3 -c 'import sys; sys.stdout.write(open(sys.argv[1], "rb").read(int(sys.argv[2])).hex())' "$1" "$2"
+  else
+    die "need od or python3 to read the first bytes of $1"
+  fi
+}
+
+u16_le() {
+  if command -v od >/dev/null 2>&1; then
+    od -An -tu2 -N2 "$1" | tr -d ' '
+  elif command -v python3 >/dev/null 2>&1; then
+    python3 -c 'import sys; sys.stdout.write(str(int.from_bytes(open(sys.argv[1], "rb").read(2), "little")))' "$1"
+  else
+    die "need od or python3 to read the first bytes of $1"
+  fi
+}
+
+magic=$(hex_bytes "$work/probe" 4)
 format=""
 case "$magic" in
   7f454c46) format=elf ;;
@@ -129,7 +165,7 @@ case "$magic" in
     # COFF has no magic; the first field of the file header is the machine
     # type. 332=0x14c i386, 34404=0x8664 x86_64, 43620=0xaa64 arm64,
     # 448=0x1c0 arm, 452=0x1c4 armnt, 512=0x200 ia64, 20530/20580=riscv.
-    machine=$(od -An -tu2 -N2 "$work/probe" | tr -d ' ')
+    machine=$(u16_le "$work/probe")
     case "$machine" in
       332 | 34404 | 43620 | 448 | 452 | 512 | 20530 | 20580 | 25188) format=coff ;;
       *) die "unrecognised object format (magic $magic) in $archive" ;;
@@ -143,21 +179,30 @@ esac
 
 objcopy=""
 objdump=""
-require_binutils() {
+
+# require_objcopy: the section remover, shared by every format.
+require_objcopy() {
   [ -n "$objcopy" ] && return 0
-  local pair candidate header
-  for pair in "llvm-objcopy:llvm-objdump" \
-    "${TOOL_PREFIX:-}objcopy:${TOOL_PREFIX:-}objdump" \
-    "objcopy:objdump"; do
-    candidate=${pair%%:*}
-    header=${pair#*:}
+  local candidate
+  for candidate in llvm-objcopy "${TOOL_PREFIX:-}objcopy" objcopy; do
     objcopy=$(find_tool "$candidate" || true)
-    objdump=$(find_tool "$header" || true)
-    [ -n "$objcopy" ] && [ -n "$objdump" ] && return 0
+    [ -n "$objcopy" ] && return 0
   done
-  objcopy=""
   return 1
 }
+
+# require_objdump: only ELF/COFF need it, to name the sections to remove.
+require_objdump() {
+  [ -n "$objdump" ] && return 0
+  local candidate
+  for candidate in llvm-objdump "${TOOL_PREFIX:-}objdump" objdump; do
+    objdump=$(find_tool "$candidate" || true)
+    [ -n "$objdump" ] && return 0
+  done
+  return 1
+}
+
+require_binutils() { require_objcopy && require_objdump; }
 
 # The names the go command rejects (cmd/go/internal/work/security.go). Match
 # them exactly: .llvm_addrsig and friends are ordinary LLVM metadata sections,
@@ -167,39 +212,52 @@ lto_name_re='^(\.llvmbc|\.llvmcmd|\.llvm\.lto|\.llvm\.linker\.options|\.llvm\.de
 
 # lto_sections FILE: section names the Go linker rejects for this object.
 lto_sections() {
-  "$objdump" -h -w "$1" 2>/dev/null | awk -v re="$lto_name_re" '
+  "$objdump" -h -w "$1" 2>/dev/null | tr -d '\r' | awk -v re="$lto_name_re" '
     { for (i = 1; i <= NF; i++)
         if ($i ~ re) print $i }
   ' | sort -u || true
 }
 
 # ---------------------------------------------------------------------------
-# Mach-O: ld -r per member
+# Mach-O: llvm-objcopy per member
 # ---------------------------------------------------------------------------
 
-macho_ld=""
 macho_otool=""
-macho_lipo=""
-require_macho_tools() {
-  if [ -n "$macho_ld" ]; then return 0; fi
+require_otool() {
+  [ -n "$macho_otool" ] && return 0
   if command -v xcrun >/dev/null 2>&1; then
-    macho_ld=$(xcrun --find ld 2>/dev/null || true)
     macho_otool=$(xcrun --find otool 2>/dev/null || true)
-    macho_lipo=$(xcrun --find lipo 2>/dev/null || true)
   fi
-  [ -n "$macho_ld" ] || macho_ld=$(command -v ld 2>/dev/null || true)
   [ -n "$macho_otool" ] || macho_otool=$(command -v otool 2>/dev/null || true)
-  [ -n "$macho_lipo" ] || macho_lipo=$(command -v lipo 2>/dev/null || true)
-  [ -n "$macho_ld" ] && [ -n "$macho_otool" ] && [ -n "$macho_lipo" ] && return 0
-  return 1
+  [ -n "$macho_otool" ]
 }
 
 # macho_lto_ir FILE: the __LLVM/__GNU_LTO segment lines, if any. A Mach-O
 # archive member carries bitcode in the __LLVM segment (section __bitcode),
 # which is exactly what the go command rejects.
 macho_lto_ir() {
-  "$macho_otool" -l "$1" 2>/dev/null |
+  "$macho_otool" -l "$1" 2>/dev/null | tr -d '\r' |
     grep -E 'segname[[:space:]]+__(LLVM|GNU_LTO)|sectname[[:space:]]+(\.llvmbc|\.llvmcmd|\.llvm\.lto|\.gnu\.lto_|\.gnu\.debuglto_)' || true
+}
+
+# macho_lto_sections FILE: the same sections as "segment,section" pairs, the
+# form llvm-objcopy --remove-section takes. otool prints each section's own
+# segment/section pair under its "Section" header.
+macho_lto_sections() {
+  "$macho_otool" -l "$1" 2>/dev/null | tr -d '\r' | awk '
+    function emit() {
+      if (!insection) return
+      if (seg ~ /^__(LLVM|GNU_LTO)$/ ||
+          sec ~ /^\.llvmbc$/ || sec ~ /^\.llvmcmd$/ || sec ~ /^\.llvm\.lto/ ||
+          sec ~ /^\.gnu\.lto_/ || sec ~ /^\.gnu\.debuglto_/)
+        print seg "," sec
+      insection = 0
+    }
+    /^Section$/ { emit(); insection = 1; sec = ""; seg = ""; next }
+    insection && $1 == "sectname" { sec = $2; next }
+    insection && $1 == "segname" { seg = $2; next }
+    END { emit() }
+  '
 }
 
 # ---------------------------------------------------------------------------
@@ -212,7 +270,7 @@ macho_lto_ir() {
 extract_all() {
   local target=$1 dir=$2 member missing=""
   rm -rf "$dir" && mkdir -p "$dir"
-  (cd "$dir" && "$ar" x "$target") || die "cannot extract $target"
+  (cd "$dir" && "$ar" x "$target") || die "cannot extract $target with $ar"
   while IFS= read -r member; do
     [ -f "$dir/$member" ] || missing="$missing $member"
   done <"$work/members"
@@ -253,12 +311,21 @@ scan_archive() {
 
 case "$format" in
   elf | coff)
-    require_binutils ||
-      die "no objcopy/objdump found; install binutils or run 'rustup component add llvm-tools'"
+    if [ "$mode" = strip ]; then
+      require_binutils ||
+        die "no objcopy/objdump found; install binutils or run 'rustup component add llvm-tools'"
+    else
+      require_objdump ||
+        die "no objdump found; install binutils or run 'rustup component add llvm-tools'"
+    fi
     ;;
   macho)
-    require_macho_tools ||
-      die "no Apple linker/otool/lipo found; Mach-O archives can only be stripped on macOS"
+    require_otool ||
+      die "no otool found; Mach-O archives can only be inspected on macOS (Xcode command line tools)"
+    if [ "$mode" = strip ]; then
+      require_objcopy ||
+        die "no llvm-objcopy found; run 'rustup component add llvm-tools'"
+    fi
     ;;
 esac
 
@@ -276,10 +343,6 @@ mkdir -p "$work/out"
 extract_all "$archive" "$work/in"
 
 changed=0
-if [ "$format" = macho ]; then
-  arch=$("$macho_lipo" -archs "$archive" 2>/dev/null | awk 'NR==1 { print $1 }')
-  [ -n "$arch" ] || die "cannot determine the Mach-O architecture of $archive"
-fi
 
 for member in "$work/in"/*; do
   [ -f "$member" ] || continue
@@ -295,13 +358,19 @@ for member in "$work/in"/*; do
         cp "$member" "$work/out/$base"
         continue
       fi
-      # The Apple linker rewrites the object and drops the __LLVM segment.
-      # Doing it per member (not merged) keeps the archive lazy: the Go linker
-      # still pulls only the members a program references.
-      "$macho_ld" -r -arch "$arch" -o "$work/out/$base" "$member" ||
-        die "ld -r failed on member '$base' of $archive"
+      # Rewrite the member without its bitcode sections. llvm-objcopy drops
+      # the __LLVM segment once its last section is gone; the machine code and
+      # every symbol stay as they are.
+      args=()
+      while IFS= read -r pair; do
+        [ -n "$pair" ] && args+=("--remove-section=$pair")
+      done < <(macho_lto_sections "$member")
+      [ "${#args[@]}" -gt 0 ] ||
+        die "member '$base' of $archive carries LTO IR but no section to remove it by"
+      "$objcopy" "${args[@]}" "$member" "$work/out/$base" ||
+        die "llvm-objcopy failed on member '$base' of $archive"
       [ -z "$(macho_lto_ir "$work/out/$base")" ] ||
-        die "the __LLVM segment survived ld -r on member '$base' of $archive"
+        die "the __LLVM segment survived llvm-objcopy on member '$base' of $archive"
       ;;
     *)
       if ! "$objdump" -h "$member" >/dev/null 2>&1; then

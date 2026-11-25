@@ -406,11 +406,17 @@ Windows 库用 MSVC 工具链在原生 Windows 上构建（CI 使用 Windows
 Rust 工具链会把这段 IR 嵌进所有 staticlib，无法通过 `Cargo.toml` 关闭。因此
 从源码构建也需要该脚本所用的工具：
 
-- ELF 和 COFF 库使用 `objcopy`、`objdump` 和 `ar`。建议从 Rust 的
+- 三种格式都会用 LLVM 的 `objcopy` 逐成员改写：按名字删除 section，并在该
+  segment 的最后一个 section 被删掉后丢掉整个 segment；`objdump` 用来列出
+  ELF/COFF 的 section，`ar` 用来解包和重新打包归档。建议三者都从 Rust 的
   `llvm-tools` 组件获取（`rustup component add llvm-tools`）：与主机自带的
-  binutils 不同，它们能读取任意 Rust 目标，因此 x86_64 Linux 主机可以处理
-  arm64 的库。也可以用 `TOOL_PREFIX=aarch64-linux-gnu-` 指定交叉 binutils。
-- Mach-O 库使用 Apple 链接器（`ld -r`），Xcode 命令行工具自带。
+  binutils 不同，它们能读取任意 Rust 目标和格式，因此 x86_64 Linux 主机可以
+  处理 arm64 的库。也可以用 `TOOL_PREFIX=aarch64-linux-gnu-` 指定交叉
+  binutils。
+- Mach-O 库另外需要 Apple 的 `otool` 来定位 `__LLVM` 段（Xcode 命令行工具
+  自带）。这里不再使用 Apple 链接器：只有当 `__LLVM` 是独立 segment 时
+  `ld -r` 才会丢掉它，而 rustc 把它放在 object 自身的 segment 里，新版 Xcode
+  的链接器会原样保留。
 
 `scripts/strip-llvm-lto.sh --check <archive>` 只校验、不修改；构建脚本和
 **Build libraries** 工作流都会在仍含该 IR 时报错，而不是照常发布。

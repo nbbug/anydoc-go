@@ -435,13 +435,18 @@ LTO IR that Go 1.26.11 and 1.27.4 reject (see
 it in every staticlib, so it cannot be switched off from `Cargo.toml`. That
 makes a source build depend on the stripper's tools as well:
 
-- ELF and COFF archives use `objcopy`, `objdump`, and `ar`. Take them from the
-  Rust `llvm-tools` component (`rustup component add llvm-tools`): unlike a host
-  binutils they read every Rust target, so an x86_64 Linux host can strip an
-  arm64 archive. `TOOL_PREFIX=aarch64-linux-gnu-` selects a cross binutils
-  instead.
-- Mach-O archives use the Apple linker (`ld -r`), which comes with the Xcode
-  command line tools.
+- Every format is rewritten member by member with LLVM's `objcopy`, which
+  removes a section by name and drops the enclosing segment once its last
+  section is gone; `objdump` names the ELF/COFF sections and `ar` unpacks and
+  repacks the archive. Take all three from the Rust `llvm-tools` component
+  (`rustup component add llvm-tools`): unlike a host binutils they read every
+  Rust target and format, so an x86_64 Linux host can strip an arm64 archive.
+  `TOOL_PREFIX=aarch64-linux-gnu-` selects a cross binutils instead.
+- Mach-O archives additionally use Apple's `otool` to name the `__LLVM`
+  sections; it comes with the Xcode command line tools. The Apple linker is not
+  used: `ld -r` drops the `__LLVM` segment only when it is a segment of its
+  own, while rustc places it inside the object's segment and current Xcode
+  linkers keep it there.
 
 `scripts/strip-llvm-lto.sh --check <archive>` verifies an archive without
 changing it; the build script and the **Build libraries** workflow both fail

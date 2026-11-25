@@ -141,10 +141,12 @@ jobs:
         include:
           - target: aarch64-apple-darwin
             dir: darwin_arm64
+            goarch: arm64
             static: libanydoc_go.a
             shared: libanydoc_go.dylib
           - target: x86_64-apple-darwin
             dir: darwin_amd64
+            goarch: amd64
             static: libanydoc_go.a
             shared: libanydoc_go.dylib
     steps:
@@ -152,6 +154,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
+          components: llvm-tools
       - uses: Swatinem/rust-cache@v2
         with:
           key: anydoc-go-${{ matrix.target }}
@@ -159,6 +162,19 @@ jobs:
         run: LIBS=both TARGET=${{ matrix.target }} ./scripts/build-anydoc-lib.sh
       - name: Verify the archive carries no LLVM LTO IR
         run: ./scripts/strip-llvm-lto.sh --check "lib/${{ matrix.dir }}/${{ matrix.static }}"
+      # The Mach-O archive is rewritten with llvm-objcopy rather than relinked,
+      # so exercise it through the real cgo path with the release whose check
+      # rejects LTO IR: a mangled member shows up here instead of in a user's
+      # build.
+      - uses: actions/setup-go@v6
+        with:
+          go-version: "1.27.x"
+      - name: Link the archive with Go 1.27.4
+        env:
+          GOTOOLCHAIN: go1.27.4
+          CGO_ENABLED: "1"
+          GOARCH: ${{ matrix.goarch }}
+        run: go build ./examples/convert ./examples/parse
       - name: Package
         run: |
           mkdir -p "pkg-static/lib/${{ matrix.dir }}" pkg-static/include
