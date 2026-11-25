@@ -29,20 +29,29 @@
 #   ELF/COFF  objcopy --remove-section=.llvmbc ... then re-archive
 #   Mach-O    llvm-objcopy --remove-section=__LLVM,__bitcode ...
 #
+# MSVC archives need one extra step: rustc bundles import objects (and import
+# stubs) for the raw-dylib system DLLs, so a static library contains several
+# members with the same name (advapi32.dll, bcryptprimitives.dll, ...). ar
+# cannot unpack those without losing all but one, so they are unpacked by index
+# with python3 and the PE import objects are carried through untouched -- they
+# have no sections and objcopy cannot parse them.
+#
 # Mach-O keeps the bitcode in the __LLVM segment. The Apple linker only drops
 # that segment from `ld -r` output when it is a segment of its own; rustc's
 # objects keep it inside the object segment, and newer Xcode linkers preserve
 # it there, so the object has to be rewritten directly instead of relinked.
 #
 # Tools: objcopy for the rewrite, objdump to name ELF/COFF sections, ar to
-# unpack and repack the archive, and Apple's otool (in the Xcode command line
-# tools) to name Mach-O sections. Prefer objcopy/objdump/ar from the Rust
-# `llvm-tools` component: unlike a host binutils they read every Rust target and
-# format, so one Linux host can strip an arm64 archive. TOOL_PREFIX selects a
-# cross binutils instead, e.g. TOOL_PREFIX=aarch64-linux-gnu-.
+# unpack and repack the archive (python3 instead of ar x for MSVC archives),
+# and Apple's otool (in the Xcode command line tools) to name Mach-O sections.
+# Prefer objcopy/objdump/ar from the Rust `llvm-tools` component: unlike a host
+# binutils they read every Rust target and format, so one Linux host can strip
+# an arm64 archive. TOOL_PREFIX selects a cross binutils instead, e.g.
+# TOOL_PREFIX=aarch64-linux-gnu-.
 set -euo pipefail
 
 prog=${0##*/}
+script_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 die() {
   printf 'error: %s: %s\n' "$prog" "$*" >&2
   exit 1
@@ -124,16 +133,6 @@ trap 'rm -rf "$work"' EXIT
 grep -vE '^(/.*|__\.SYMDEF.*)$' "$work/members.all" >"$work/members" || true
 [ -s "$work/members" ] || die "no object members in $archive"
 
-duplicates=$(sort "$work/members" | uniq -d)
-if [ -n "$duplicates" ]; then
-  die "member names are not unique ($(printf '%s\n' "$duplicates" | awk 'NR==1') repeats); refusing to repack $archive"
-fi
-
-probe_member=$(awk 'NR==1' "$work/members")
-"$ar" p "$archive" "$probe_member" >"$work/probe" 2>/dev/null ||
-  die "cannot read member '$probe_member' from $archive"
-[ -s "$work/probe" ] || die "member '$probe_member' in $archive is empty"
-
 # hex_bytes FILE N / u16_le FILE: read the leading bytes without assuming a
 # full coreutils install (Git Bash on Windows does not always ship od).
 hex_bytes() {
@@ -156,22 +155,37 @@ u16_le() {
   fi
 }
 
-magic=$(hex_bytes "$work/probe" 4)
+# The first member is not a reliable probe: an MSVC archive interleaves
+# regular objects, import stubs, and PE import objects, and only the first two
+# kinds start with an object header. Probe members until one is recognisable.
 format=""
-case "$magic" in
-  7f454c46) format=elf ;;
-  cffaedfe | cefaedfe | feedface | feedfacf | cafebabe | cafebabf) format=macho ;;
-  *)
-    # COFF has no magic; the first field of the file header is the machine
-    # type. 332=0x14c i386, 34404=0x8664 x86_64, 43620=0xaa64 arm64,
-    # 448=0x1c0 arm, 452=0x1c4 armnt, 512=0x200 ia64, 20530/20580=riscv.
-    machine=$(u16_le "$work/probe")
-    case "$machine" in
-      332 | 34404 | 43620 | 448 | 452 | 512 | 20530 | 20580 | 25188) format=coff ;;
-      *) die "unrecognised object format (magic $magic) in $archive" ;;
-    esac
-    ;;
-esac
+probes=0
+while IFS= read -r probe_member; do
+  probes=$((probes + 1))
+  [ "$probes" -le 25 ] || break
+  "$ar" p "$archive" "$probe_member" >"$work/probe" 2>/dev/null || continue
+  [ -s "$work/probe" ] || continue
+  case "$(hex_bytes "$work/probe" 4)" in
+    7f454c46) format=elf; break ;;
+    cffaedfe | cefaedfe | feedface | feedfacf | cafebabe | cafebabf) format=macho; break ;;
+  esac
+  # COFF has no magic; the first field of the file header is the machine type.
+  # 332=0x14c i386, 34404=0x8664 x86_64, 43620=0xaa64 arm64, 448=0x1c0 arm,
+  # 452=0x1c4 armnt, 512=0x200 ia64, 20530/20580=riscv.
+  case "$(u16_le "$work/probe")" in
+    332 | 34404 | 43620 | 448 | 452 | 512 | 20530 | 20580 | 25188) format=coff; break ;;
+  esac
+done <"$work/members"
+[ -n "$format" ] || die "unrecognised object format in $archive"
+
+# MSVC archives repeat member names on purpose (see extract_members). Anywhere
+# else a repeat would make ar x drop a member, so refuse such an archive.
+if [ "$format" != coff ]; then
+  duplicates=$(sort "$work/members" | uniq -d)
+  if [ -n "$duplicates" ]; then
+    die "member names are not unique ($(printf '%s\n' "$duplicates" | awk 'NR==1') repeats); refusing to repack $archive"
+  fi
+fi
 
 # ---------------------------------------------------------------------------
 # ELF/COFF: objcopy per member
@@ -264,29 +278,49 @@ macho_lto_sections() {
 # Scan: report LTO IR in every member (used by --check and post-strip)
 # ---------------------------------------------------------------------------
 
-# extract_all ARCHIVE DIR: unpack every member, and fail if any object the
-# archive lists did not land on disk -- an extraction that silently dropped
-# members would make the scan below report a false all-clear.
-extract_all() {
-  local target=$1 dir=$2 member missing=""
+# extract_members ARCHIVE DIR: unpack every member into DIR and print one
+# "<path>\t<kind>" line per member, in archive order. kind is "object" when the
+# member is a regular object objcopy can rewrite, "import" for a PE import
+# object, and "other" otherwise, which the caller refuses rather than ship.
+#
+# ELF and Mach-O archives unpack with ar: their member names are unique, and
+# the extraction is checked against the archive listing so nothing is lost.
+#
+# MSVC archives cannot: rustc bundles import objects and import stubs for the
+# raw-dylib system DLLs, so one name can appear several times and ar x would
+# silently keep only the last copy, dropping symbols the linker needs. Those
+# archives are unpacked by index (msvc-lib-members.py) under unique file names.
+# Member names are cosmetic for linking; the repack regenerates the archive
+# symbol table that links symbols to members.
+extract_members() {
+  local target=$1 dir=$2 member missing="" f
   rm -rf "$dir" && mkdir -p "$dir"
+  if [ "$format" = coff ]; then
+    python3 "$script_dir/msvc-lib-members.py" "$target" "$dir" ||
+      die "cannot unpack $target: not a readable static library"
+    return 0
+  fi
   (cd "$dir" && "$ar" x "$target") || die "cannot extract $target with $ar"
   while IFS= read -r member; do
     [ -f "$dir/$member" ] || missing="$missing $member"
   done <"$work/members"
   [ -z "$missing" ] || die "ar x did not extract from $target:$missing"
+  for f in "$dir"/*; do
+    [ -f "$f" ] || continue
+    case "${f##*/}" in *SYMDEF*) rm -f "$f"; continue ;; esac
+    printf '%s\tobject\n' "$f"
+  done
 }
 
 scan_archive() {
-  local target=$1 dir="$work/scan" member base found=0
-  extract_all "$target" "$dir"
-  for member in "$dir"/*; do
-    [ -f "$member" ] || continue
+  local target=$1 dir="$work/scan" member kind base found=0 hits section sections
+  extract_members "$target" "$dir" >"$work/scan.manifest" ||
+    die "cannot unpack $target"
+  while IFS=$'\t' read -r member kind; do
+    [ "$kind" = object ] || continue
     base=${member##*/}
-    case "$base" in *SYMDEF*) continue ;; esac
     case "$format" in
       macho)
-        local hits
         hits=$(macho_lto_ir "$member")
         if [ -n "$hits" ]; then
           printf '%s: %s\n' "$base" "$(printf '%s' "$hits" | awk 'NR==1')"
@@ -294,14 +328,15 @@ scan_archive() {
         fi
         ;;
       *)
+        sections=$(lto_sections "$member")
         while IFS= read -r section; do
           [ -n "$section" ] || continue
           printf '%s: %s\n' "$base" "$section"
           found=1
-        done < <(lto_sections "$member")
+        done <<<"$sections"
         ;;
     esac
-  done
+  done <"$work/scan.manifest"
   return $((found == 0 ? 0 : 1))
 }
 
@@ -317,6 +352,10 @@ case "$format" in
     else
       require_objdump ||
         die "no objdump found; install binutils or run 'rustup component add llvm-tools'"
+    fi
+    if [ "$format" = coff ]; then
+      command -v python3 >/dev/null 2>&1 ||
+        die "no python3 found; MSVC archives are unpacked by index because their member names repeat"
     fi
     ;;
   macho)
@@ -340,14 +379,24 @@ if [ "$mode" = check ]; then
 fi
 
 mkdir -p "$work/out"
-extract_all "$archive" "$work/in"
+extract_members "$archive" "$work/in" >"$work/manifest" ||
+  die "cannot unpack $archive"
+[ -s "$work/manifest" ] || die "no members unpacked from $archive"
 
 changed=0
 
-for member in "$work/in"/*; do
-  [ -f "$member" ] || continue
+while IFS=$'\t' read -r member kind; do
   base=${member##*/}
-  case "$base" in *SYMDEF*) continue ;; esac
+  case "$kind" in
+    import)
+      # PE import object for a raw-dylib system DLL: no sections, nothing for
+      # objcopy to remove, and objcopy cannot parse it. Carry it over as is.
+      cp "$member" "$work/out/$base"
+      continue
+      ;;
+    object) ;;
+    *) die "member '$base' of $archive is neither a COFF object nor a PE import object" ;;
+  esac
 
   case "$format" in
     macho)
@@ -362,9 +411,10 @@ for member in "$work/in"/*; do
       # the __LLVM segment once its last section is gone; the machine code and
       # every symbol stay as they are.
       args=()
+      pairs=$(macho_lto_sections "$member")
       while IFS= read -r pair; do
         [ -n "$pair" ] && args+=("--remove-section=$pair")
-      done < <(macho_lto_sections "$member")
+      done <<<"$pairs"
       [ "${#args[@]}" -gt 0 ] ||
         die "member '$base' of $archive carries LTO IR but no section to remove it by"
       "$objcopy" "${args[@]}" "$member" "$work/out/$base" ||
@@ -393,20 +443,21 @@ for member in "$work/in"/*; do
       ;;
   esac
   changed=1
-done
+done <"$work/manifest"
 
 if [ "$changed" -eq 0 ]; then
   printf '%s: %s carries no LLVM LTO IR, left untouched\n' "$prog" "$archive"
   exit 0
 fi
 
-# Repack with the original member names. `ar` regenerates the archive symbol
-# index, so the result links exactly like the archive Rust wrote.
+# Repack in archive order. `ar` regenerates the symbol index, including the
+# entries for PE import objects, so the result resolves like the archive Rust
+# wrote; what it writes is still a normal COFF static library, which mingw's ld
+# (what cgo uses) and LLD both read.
 members=()
-for member in "$work/out"/*; do
-  [ -f "$member" ] || continue
+while IFS=$'\t' read -r member _kind; do
   members+=("${member##*/}")
-done
+done <"$work/manifest"
 [ "${#members[@]}" -gt 0 ] || die "nothing to repack for $archive"
 (cd "$work/out" && "$ar" rcs "$work/stripped" "${members[@]}") ||
   die "cannot repack $archive"

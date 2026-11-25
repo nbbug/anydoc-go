@@ -447,6 +447,13 @@ makes a source build depend on the stripper's tools as well:
   used: `ld -r` drops the `__LLVM` segment only when it is a segment of its
   own, while rustc places it inside the object's segment and current Xcode
   linkers keep it there.
+- MSVC archives (the Windows ones) are unpacked by index with `python3` instead
+  of `ar`: rustc bundles import objects for the raw-dylib system DLLs, so one
+  static library holds several members with the same name (`advapi32.dll`,
+  `bcryptprimitives.dll`, …) and `ar x` would silently keep only the last one,
+  dropping symbols the linker needs. The import objects themselves are carried
+  through untouched — they have no sections, and `objcopy` cannot parse them —
+  while the repack rebuilds the archive index, import symbols included.
 
 `scripts/strip-llvm-lto.sh --check <archive>` verifies an archive without
 changing it; the build script and the **Build libraries** workflow both fail

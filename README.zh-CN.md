@@ -417,6 +417,11 @@ Rust 工具链会把这段 IR 嵌进所有 staticlib，无法通过 `Cargo.toml`
   自带）。这里不再使用 Apple 链接器：只有当 `__LLVM` 是独立 segment 时
   `ld -r` 才会丢掉它，而 rustc 把它放在 object 自身的 segment 里，新版 Xcode
   的链接器会原样保留。
+- MSVC 库（Windows）改用 `python3` 按索引逐个解包，而不是 `ar x`：rustc 会
+  为 raw-dylib 系统 DLL 打包 import object，导致同一个静态库里出现多个同名
+  成员（`advapi32.dll`、`bcryptprimitives.dll` 等），`ar x` 会静默地只保留
+  最后一个，从而丢掉链接器需要的符号。import object 本身原样保留（它没有
+  section，`objcopy` 也无法解析），重新打包时会重建索引，包含 import 符号。
 
 `scripts/strip-llvm-lto.sh --check <archive>` 只校验、不修改；构建脚本和
 **Build libraries** 工作流都会在仍含该 IR 时报错，而不是照常发布。
