@@ -256,6 +256,13 @@ fi
 
 cp "target/$target/release/$lib_name" "$dest/$lib_name"
 
+# Rust's precompiled std embeds LLVM bitcode in its objects, so every archive
+# above carries LTO IR (".llvmbc"/".llvmcmd" on ELF and COFF, the __LLVM
+# segment on Mach-O). Go 1.26.11 and 1.27.4 refuse to pass such a library to
+# the C linker, which is why the archive is stripped here, before the ABI
+# check below validates the bytes that get shipped.
+"$repo_root/scripts/strip-llvm-lto.sh" "$dest/$lib_name"
+
 # The header declares the ABI, so the archive must export every declared
 # function. A stale archive would otherwise surface only much later, as a Go
 # link failure in the workflow's smoke test; catch it here, next to the

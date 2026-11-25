@@ -43,6 +43,8 @@ jobs:
     steps:
       - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: llvm-tools
       - uses: Swatinem/rust-cache@v2
         with:
           key: anydoc-go-${{ matrix.target }}
@@ -52,6 +54,11 @@ jobs:
           tool: cross
       - name: Build static and shared libraries
         run: LIBS=both BUILD_TOOL=${{ matrix.tool }} TARGET=${{ matrix.target }} ./scripts/build-anydoc-lib.sh
+      # Go 1.26.11/1.27.4 reject archives that carry LLVM LTO IR, so the build
+      # strips it. Verify the bytes that get packaged, not the build's word for
+      # it: this is the exact file users download.
+      - name: Verify the archive carries no LLVM LTO IR
+        run: ./scripts/strip-llvm-lto.sh --check "lib/${{ matrix.dir }}/${{ matrix.static }}"
       - name: Package
         run: |
           mkdir -p "pkg-static/lib/${{ matrix.dir }}" pkg-static/include
@@ -93,12 +100,16 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
+          components: llvm-tools
       - uses: Swatinem/rust-cache@v2
         with:
           key: anydoc-go-${{ matrix.target }}
       - name: Build static and shared libraries
         shell: bash
         run: LIBS=both TARGET=${{ matrix.target }} ./scripts/build-anydoc-lib.sh
+      - name: Verify the archive carries no LLVM LTO IR
+        shell: bash
+        run: ./scripts/strip-llvm-lto.sh --check "lib/${{ matrix.dir }}/${{ matrix.static }}"
       - name: Package
         shell: bash
         run: |
@@ -146,6 +157,8 @@ jobs:
           key: anydoc-go-${{ matrix.target }}
       - name: Build static and shared libraries
         run: LIBS=both TARGET=${{ matrix.target }} ./scripts/build-anydoc-lib.sh
+      - name: Verify the archive carries no LLVM LTO IR
+        run: ./scripts/strip-llvm-lto.sh --check "lib/${{ matrix.dir }}/${{ matrix.static }}"
       - name: Package
         run: |
           mkdir -p "pkg-static/lib/${{ matrix.dir }}" pkg-static/include
@@ -209,14 +222,15 @@ jobs:
         run: |
           set -euo pipefail
           tar -xzf dist/anydoc-static-linux_amd64.tar.gz -C .
-          go test -count=1 ./...
+          GOTOOLCHAIN=go1.27.4 go test -count=1 ./...
       - name: Smoke test dynamic package
         run: |
           set -euo pipefail
           mkdir -p lib/linux_amd64 /tmp/anydoc-dyn
           tar -xzf dist/anydoc-dynlib-linux_amd64.tar.gz -C /tmp/anydoc-dyn
           cp /tmp/anydoc-dyn/lib/linux_amd64/libanydoc_go.so lib/linux_amd64/
-          LD_LIBRARY_PATH="$PWD/lib/linux_amd64" go test -count=1 -tags anydoc_dynamic ./...
+          LD_LIBRARY_PATH="$PWD/lib/linux_amd64" \
+            GOTOOLCHAIN=go1.27.4 go test -count=1 -tags anydoc_dynamic ./...
       - name: Write checksums
         run: |
           cd dist

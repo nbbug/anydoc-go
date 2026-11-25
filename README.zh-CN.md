@@ -307,6 +307,14 @@ go build -mod=vendor ./...
 链接器会优先选择共享库。如果需要同时保留两种，请分别解压到不同目录，
 并通过 `CGO_LDFLAGS` 指定其中一种。
 
+静态库在构建时已剔除 LLVM LTO IR（`.llvmbc`/`.llvmcmd` 段，以及 Mach-O 的
+`__LLVM` 段）。Rust 的标准库自带嵌入的 bitcode，因此未剔除的静态库会被
+Go 1.26.11 和 1.27.4 拒绝，报错
+`disallowed LTO section ".llvmbc" in #cgo LDFLAGS`（后续补丁版本重新允许这些段，见
+[golang.org/issue/83126](https://github.com/golang/go/issues/83126)）。使用时
+无需任何额外配置：如果遇到该报错，说明下载的压缩包早于该处理，重新下载
+release 资源即可。
+
 使用前请校验（macOS 使用 `shasum -a 256 -c SHA256SUMS`）：
 
 ```
@@ -392,6 +400,21 @@ Windows 库用 MSVC 工具链在原生 Windows 上构建（CI 使用 Windows
 [version.go](version.go) 与 Cargo.toml 的锁定版本不一致时拒绝构建；
 [Cargo.lock](Cargo.lock) 存在时使用 `--locked` 构建。
 
+每个静态库随后都会经过
+[scripts/strip-llvm-lto.sh](scripts/strip-llvm-lto.sh) 处理，剔除 Go
+1.26.11 与 1.27.4 会拒绝的 LLVM LTO IR（见[预编译库](#预编译库下载)）——
+Rust 工具链会把这段 IR 嵌进所有 staticlib，无法通过 `Cargo.toml` 关闭。因此
+从源码构建也需要该脚本所用的工具：
+
+- ELF 和 COFF 库使用 `objcopy`、`objdump` 和 `ar`。建议从 Rust 的
+  `llvm-tools` 组件获取（`rustup component add llvm-tools`）：与主机自带的
+  binutils 不同，它们能读取任意 Rust 目标，因此 x86_64 Linux 主机可以处理
+  arm64 的库。也可以用 `TOOL_PREFIX=aarch64-linux-gnu-` 指定交叉 binutils。
+- Mach-O 库使用 Apple 链接器（`ld -r`），Xcode 命令行工具自带。
+
+`scripts/strip-llvm-lto.sh --check <archive>` 只校验、不修改；构建脚本和
+**Build libraries** 工作流都会在仍含该 IR 时报错，而不是照常发布。
+
 ### 在 CI 中重新构建
 
 **Build libraries** 工作流
@@ -405,8 +428,10 @@ release）。它不会向仓库提交任何内容。
 
 在修改 `anydoc = "=X.Y.Z"` 锁定版本、C ABI、平台矩阵或构建工具时运行它。
 **CI** 工作流在每次 push 和 pull request 时执行 gofmt 检查、版本锁定一致性
-检查、无 cgo 模式测试和动态标签 vet；它还会从源码构建 linux/amd64 静态库
-并运行完整的 cgo 测试套件。
+检查、无 cgo 模式测试和动态标签 vet；它还会从源码构建 linux/amd64 静态库，
+用 Go 1.27.4（cgo 检查会拒绝 LLVM LTO IR 的版本）链接一次 —— 这样剔除步骤
+一旦回退，失败会出现在 CI 而不是使用者的 `go build` —— 然后运行完整的 cgo
+测试套件。
 
 ## Wasm 与本绑定的对比
 

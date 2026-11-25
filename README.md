@@ -327,6 +327,16 @@ archive and the shared library are present, the linker resolves `-lanydoc_go`
 to the shared library. To keep both, extract them into separate directories
 and choose one through `CGO_LDFLAGS`.
 
+The static archives are stripped of LLVM LTO IR (`.llvmbc`/`.llvmcmd`
+sections, the Mach-O `__LLVM` segment) while they are built. Rust ships its
+standard library with embedded bitcode, so an unstripped archive is rejected
+by Go 1.26.11 and 1.27.4 with
+`disallowed LTO section ".llvmbc" in #cgo LDFLAGS` (later patch releases
+accept the sections again, see
+[golang.org/issue/83126](https://github.com/golang/go/issues/83126)). Nothing
+to configure: if you see that error, the tarball predates the stripping —
+download the release asset again.
+
 Verify before use (`shasum -a 256 -c SHA256SUMS` on macOS):
 
 ```
@@ -418,6 +428,25 @@ scripts pin the exact `anydoc` version, refuse to build when
 [version.go](version.go) disagrees with the Cargo.toml pin, and build with
 `--locked` once [Cargo.lock](Cargo.lock) exists.
 
+Every static archive is then post-processed by
+[scripts/strip-llvm-lto.sh](scripts/strip-llvm-lto.sh), which removes the LLVM
+LTO IR that Go 1.26.11 and 1.27.4 reject (see
+[Prebuilt libraries](#prebuilt-libraries-download)) — the Rust toolchain embeds
+it in every staticlib, so it cannot be switched off from `Cargo.toml`. That
+makes a source build depend on the stripper's tools as well:
+
+- ELF and COFF archives use `objcopy`, `objdump`, and `ar`. Take them from the
+  Rust `llvm-tools` component (`rustup component add llvm-tools`): unlike a host
+  binutils they read every Rust target, so an x86_64 Linux host can strip an
+  arm64 archive. `TOOL_PREFIX=aarch64-linux-gnu-` selects a cross binutils
+  instead.
+- Mach-O archives use the Apple linker (`ld -r`), which comes with the Xcode
+  command line tools.
+
+`scripts/strip-llvm-lto.sh --check <archive>` verifies an archive without
+changing it; the build script and the **Build libraries** workflow both fail
+rather than ship an archive that still carries the IR.
+
 ### Rebuilding in CI
 
 The **Build libraries** workflow
@@ -433,8 +462,10 @@ anything to the repository.
 Run it after changing the `anydoc = "=X.Y.Z"` pin, the C ABI, the platform
 matrix, or the build tooling. The **CI** workflow runs gofmt, the version-pin
 agreement check, stub-mode tests, and the dynamic-tag vet on every push and
-pull request; it also builds the linux/amd64 static archive from source and
-runs the full cgo test suite against it.
+pull request; it also builds the linux/amd64 static archive from source, links
+it with Go 1.27.4 (the release whose cgo check rejects LLVM LTO IR, so a
+stripping regression fails CI rather than a user's `go build`), and runs the
+full cgo test suite against it.
 
 ## Wasm vs. this binding
 
