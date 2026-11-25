@@ -7,3 +7,4 @@ zig-cache/
 .zig-cache/
 .DS_Store
 /dynlib/
+/lib/

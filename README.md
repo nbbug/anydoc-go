@@ -26,6 +26,10 @@ archive and `go build` links it.
 go get github.com/nbbug/anydoc-go
 ```
 
+The module already embeds the archive for every supported platform. To fetch
+only one platform's static library, use the
+[release downloads](#static-archives-download-one-platform).
+
 ## Quickstart
 
 ```go
@@ -117,8 +121,10 @@ func ToMarkdownWithOptions(path string, opts *Options) (string, error)
 func ToMarkdownBytesWithOptions(data []byte, format *Format, opts *Options) (string, error)
 
 // Options: Ocr (OcrReject, the default / OcrHosted / OcrCustom with
-// OcrHandler), APIKey (falls back to FIRECRAWL_API_KEY, then keyless),
-// APIURL (falls back to FIRECRAWL_API_URL, then https://api.firecrawl.dev).
+// OcrHandler), ParseMode (ParseModeAuto, the default / ParseModeFast /
+// ParseModeOCR for hosted OCR), APIKey (falls back to FIRECRAWL_API_KEY,
+// then keyless), APIURL (falls back to FIRECRAWL_API_URL, then
+// https://api.firecrawl.dev).
 
 // Convert with embedded images rewritten as ![alt](images/image-N.ext) so
 // they keep their original positions. PDF has no document model and is
@@ -141,7 +147,7 @@ func EmbeddedLib() []byte
 func ExtractLib(dir string) (string, error)
 
 // Module version, kept in lockstep with the pinned anydoc crate.
-const Version = "0.2.4"
+const Version = "0.2.5"
 ```
 
 **Formats** ([format.go](format.go)): `FormatDoc`, `FormatDocx`, `FormatOdt`,
@@ -177,6 +183,18 @@ For a PDF whose pages are scanned or image-only, anydoc fails with
 ```go
 md, err := anydoc.ToMarkdownBytesWithOptions(pdf, &anydoc.FormatPdf, &anydoc.Options{
 	Ocr: anydoc.OcrHosted,
+})
+```
+
+`Options.ParseMode` picks the Parse PDF mode added in anydoc 0.2.5:
+`ParseModeAuto` (the zero value) extracts text and falls back to OCR per page,
+`ParseModeFast` extracts text only, and `ParseModeOCR` OCRs every page. An
+unknown mode is rejected before anything is uploaded:
+
+```go
+md, err := anydoc.ToMarkdownBytesWithOptions(pdf, &anydoc.FormatPdf, &anydoc.Options{
+	Ocr:       anydoc.OcrHosted,
+	ParseMode: anydoc.ParseModeOCR,
 })
 ```
 
@@ -217,14 +235,16 @@ conversion (and on the machine, except for `OcrHosted`).
 
 1. **Rust C ABI** — this repository is also a Rust crate
    ([Cargo.toml](Cargo.toml)) that wraps the published `anydoc` crate
-   (pinned exactly, currently `=0.2.4`) and exposes a small C ABI
+   (pinned exactly, currently `=0.2.5`) and exposes a small C ABI
    ([src/lib.rs](src/lib.rs)): `anydoc_to_markdown*`, `anydoc_to_document`,
    format detection, and matching `_free` functions. A build script
    re-exports anydoc's crate-private `document_to_markdown` serializer so the
    official GFM rendering stays available.
 2. **One static archive per platform** — `crate-type = ["staticlib"]` builds
    `libanydoc_go.a` (~20 MB). The six archives are committed under
-   [lib/](lib/).
+   [lib/](lib/) for embedding, and the same six are published one tarball per
+   platform on the
+   [static release](https://github.com/nbbug/anydoc-go/releases/tag/static-v0.2.5).
 3. **Platform files with build tags** — one Go file per platform
    ([lib_linux_amd64.go](lib_linux_amd64.go), …) is selected by
    `//go:build linux && amd64 && cgo` and carries the `#cgo LDFLAGS` pointing
@@ -275,6 +295,57 @@ large module zip (well under proxy limits, but worth knowing). If your
 registry or bandwidth makes that uncomfortable, vendoring once is the usual
 answer — or see the dynamic-library option below.
 
+## Static archives (download one platform)
+
+`go get` already embeds the archive for every platform, so module users have
+nothing to download. The **Build static libraries** workflow also publishes
+each archive as its own tarball on the
+[static-v0.2.5 release](https://github.com/nbbug/anydoc-go/releases/tag/static-v0.2.5),
+for builds that consume the archive directly rather than through `go get`: a
+CI cache that fetches only one target, a vendored tree you populate yourself,
+or a non-Go program linking the C ABI.
+
+These tarballs do not shrink the Go module itself: `go get` still downloads
+all six, because `//go:embed` has to see every platform's file. They are the
+per-platform distribution for everything that does not need the module.
+
+| Platform      | Tarball                                                                                                                                          |
+| ------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
+| linux/amd64   | [anydoc-static-linux_amd64.tar.gz](https://github.com/nbbug/anydoc-go/releases/download/static-v0.2.5/anydoc-static-linux_amd64.tar.gz)           |
+| linux/arm64   | [anydoc-static-linux_arm64.tar.gz](https://github.com/nbbug/anydoc-go/releases/download/static-v0.2.5/anydoc-static-linux_arm64.tar.gz)           |
+| darwin/amd64  | [anydoc-static-darwin_amd64.tar.gz](https://github.com/nbbug/anydoc-go/releases/download/static-v0.2.5/anydoc-static-darwin_amd64.tar.gz)         |
+| darwin/arm64  | [anydoc-static-darwin_arm64.tar.gz](https://github.com/nbbug/anydoc-go/releases/download/static-v0.2.5/anydoc-static-darwin_arm64.tar.gz)         |
+| windows/amd64 | [anydoc-static-windows_amd64.tar.gz](https://github.com/nbbug/anydoc-go/releases/download/static-v0.2.5/anydoc-static-windows_amd64.tar.gz)       |
+| windows/arm64 | [anydoc-static-windows_arm64.tar.gz](https://github.com/nbbug/anydoc-go/releases/download/static-v0.2.5/anydoc-static-windows_arm64.tar.gz)       |
+
+Each tarball lays out the same tree as the module and carries the matching C
+header:
+
+```
+lib/<platform>/libanydoc_go.a   # anydoc_go.lib on Windows
+include/anydoc.h
+```
+
+Download [`SHA256SUMS`](https://github.com/nbbug/anydoc-go/releases/download/static-v0.2.5/SHA256SUMS)
+from the same release and verify before use:
+
+```
+sha256sum -c SHA256SUMS          # Linux
+shasum -a 256 -c SHA256SUMS      # macOS
+tar -xzf anydoc-static-linux_amd64.tar.gz
+```
+
+To pin one archive in a vendored copy, extract it over the module directory
+(re-run this after every `go mod vendor`):
+
+```
+tar -xzf anydoc-static-linux_amd64.tar.gz -C vendor/github.com/nbbug/anydoc-go
+```
+
+The tarball is the full ABI: the same static library the module links, built
+by the same workflow, so it can also be consumed by C, C++, or another
+language binding that calls [include/anydoc.h](include/anydoc.h).
+
 ## Dynamic libraries (opt-in)
 
 By default the module links the embedded static archive. Building with the
@@ -286,10 +357,11 @@ go build -tags anydoc_dynamic ./...
 
 Nothing dynamic is embedded in the module — the shared libraries are built
 by the **Build dynamic libraries** workflow and published on the
-[releases page](https://github.com/nbbug/anydoc-go/releases) as
-`anydoc-dynlib-<platform>.tar.gz` (six archives, each laying out
-`lib/<platform>/<shared library>` plus the C header). Download the one for
-your platform and make it reachable through the cgo search path:
+[dynlib-v0.2.5 release](https://github.com/nbbug/anydoc-go/releases/tag/dynlib-v0.2.5)
+as `anydoc-dynlib-<platform>.tar.gz` (six archives, each laying out
+`lib/<platform>/<shared library>` plus the C header, with a `SHA256SUMS`
+asset). Download the one for your platform and make it reachable through the
+cgo search path:
 
 - Extract it into a `lib` directory and pass the platform directory through
   `CGO_LDFLAGS` (cgo appends these flags after the package's own):
@@ -316,7 +388,7 @@ default unless module size is the bottleneck.
 You only need this to upgrade anydoc, change the C ABI, or support a new
 platform. Users of the module never do.
 
-Requirements: Rust (rustup, any recent stable — anydoc 0.2.4 needs ≥ 1.88),
+Requirements: Rust (rustup, any recent stable — anydoc 0.2.5 needs ≥ 1.88),
 plus one cross toolchain: `cross` (with Docker) or `cargo-zigbuild`
 (bundles zig, no Docker).
 
@@ -346,7 +418,9 @@ scripts pin the exact `anydoc` version, refuse to build when
 The **Build static libraries** workflow
 ([.github/workflows/build-libs.yml](.github/workflows/build-libs.yml)) builds
 all six archives, smoke-tests them by linking and converting through the Go
-package, then commits and pushes them to the main branch:
+package, commits and pushes them to the main branch, then publishes one
+tarball per platform to the `static-v0.2.5` release (the `release_tag` input;
+re-running updates the same release):
 
 **Actions → “Build static libraries” → Run workflow.**
 
@@ -404,6 +478,10 @@ anydoc parses untrusted, hostile input in your process:
 - The pinned anydoc version includes the pdf-inspector fixes that bound
   previously unbounded PDF parsing (see the anydoc changelog) — upgrade the
   pin with `--locked` rebuilds rather than ad-hoc versions.
+- anydoc 0.2.5 moves the ZIP-based formats to `zip` 9.x (9.5.1 or newer;
+  the lockfile currently resolves 9.7.3), clearing five advisories that affect
+  every 8.x release (CVE-2026-115905 through CVE-2026-115909). The static
+  release archives are rebuilt from this pin.
 - With `OcrHosted`, PDFs that fail with `needs_ocr` leave your process and
   are uploaded to Firecrawl Parse (keyless unless `FIRECRAWL_API_KEY` is
   set). Review its terms before enabling it on sensitive documents; the

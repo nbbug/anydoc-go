@@ -7,7 +7,7 @@
 # from or an import library for a dylib.
 [package]
 name = "anydoc-go"
-version = "0.2.4"
+version = "0.2.5"
 edition = "2024"
 rust-version = "1.88"
 description = "Go bindings (C ABI) for anydoc"
@@ -22,7 +22,7 @@ crate-type = ["staticlib", "cdylib"]
 # published crate rather than a path dependency.
 # Pinned exactly: the C ABI mirrors this version's error and format enums.
 [dependencies]
-anydoc = "=0.2.4"
+anydoc = "=0.2.5"
 
 [build-dependencies]
 cbindgen = "0.29"

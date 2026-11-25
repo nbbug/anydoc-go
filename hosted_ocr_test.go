@@ -96,6 +96,70 @@ func TestParseHostedRequestShape(t *testing.T) {
 	}
 }
 
+func TestParseHostedParseMode(t *testing.T) {
+	cases := []struct {
+		name string
+		mode ParseMode
+		want string
+	}{
+		{"zero value defaults to auto", "", "auto"},
+		{"explicit auto", ParseModeAuto, "auto"},
+		{"fast", ParseModeFast, "fast"},
+		{"ocr", ParseModeOCR, "ocr"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var got string
+			_, opts := newParseServer(t, func(w http.ResponseWriter, r *http.Request) {
+				var payload struct {
+					Parsers []struct {
+						Mode string `json:"mode"`
+					} `json:"parsers"`
+				}
+				if err := json.Unmarshal([]byte(r.FormValue("options")), &payload); err != nil {
+					t.Errorf("options field is not JSON: %v", err)
+				}
+				if len(payload.Parsers) != 1 {
+					t.Errorf("parsers = %v, want one entry", payload.Parsers)
+				} else {
+					got = payload.Parsers[0].Mode
+				}
+				io.WriteString(w, `{"success":true,"data":{"markdown":"# Scanned\n"}}`)
+			})
+			opts.ParseMode = tc.mode
+			if _, err := parseHosted([]byte("PDF bytes"), "scan.pdf", opts); err != nil {
+				t.Fatalf("parseHosted: %v", err)
+			}
+			if got != tc.want {
+				t.Errorf("parser mode = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestParseHostedUnknownParseMode(t *testing.T) {
+	requested := false
+	_, opts := newParseServer(t, func(w http.ResponseWriter, r *http.Request) {
+		requested = true
+		io.WriteString(w, `{"success":true,"data":{"markdown":"# Scanned\n"}}`)
+	})
+	opts.ParseMode = "bogus"
+	_, err := parseHosted([]byte("PDF bytes"), "scan.pdf", opts)
+	var ce *ConvertError
+	if !errors.As(err, &ce) {
+		t.Fatalf("err = %v, want *ConvertError", err)
+	}
+	if ce.Kind != "unsupported" {
+		t.Errorf("Kind = %q, want unsupported", ce.Kind)
+	}
+	if !strings.Contains(ce.Detail, `unknown ParseMode "bogus"`) {
+		t.Errorf("Detail = %q, want the rejected mode", ce.Detail)
+	}
+	if requested {
+		t.Error("invalid ParseMode must be rejected before any request is sent")
+	}
+}
+
 func TestParseHostedFailures(t *testing.T) {
 	cases := []struct {
 		name    string

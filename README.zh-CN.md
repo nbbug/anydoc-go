@@ -25,6 +25,9 @@ anydoc-go 通过 cgo 以**静态库**的方式链接 anydoc，并在模块内为
 go get github.com/nbbug/anydoc-go
 ```
 
+模块已经内嵌了所有支持平台的静态库。如果只需要某一个平台的静态库，可使用
+[release 下载](#单平台静态库下载)。
+
 ## 快速上手
 
 ```go
@@ -113,8 +116,9 @@ func ToMarkdownWithOptions(path string, opts *Options) (string, error)
 func ToMarkdownBytesWithOptions(data []byte, format *Format, opts *Options) (string, error)
 
 // Options：Ocr（OcrReject 默认 / OcrHosted / OcrCustom + OcrHandler）、
-// APIKey（缺省回退到 FIRECRAWL_API_KEY，再回退到免密钥）、APIURL（缺省
-// 回退到 FIRECRAWL_API_URL，再回退到 https://api.firecrawl.dev）。
+// ParseMode（托管 OCR 的解析模式：ParseModeAuto 默认 / ParseModeFast /
+// ParseModeOCR）、APIKey（缺省回退到 FIRECRAWL_API_KEY，再回退到免密钥）、
+// APIURL（缺省回退到 FIRECRAWL_API_URL，再回退到 https://api.firecrawl.dev）。
 
 // 转换并将内嵌图片重写为 ![alt](images/image-N.ext)，使图片保留原位。
 // PDF 没有文档模型，与 ToMarkdownBytes 的转换方式相同。
@@ -135,7 +139,7 @@ func EmbeddedLib() []byte
 func ExtractLib(dir string) (string, error)
 
 // 模块版本，与锁定的 anydoc crate 版本同步。
-const Version = "0.2.4"
+const Version = "0.2.5"
 ```
 
 **格式**（[format.go](format.go)）：`FormatDoc`、`FormatDocx`、`FormatOdt`、
@@ -168,6 +172,18 @@ PDF 中有扫描或纯图片页面时，anydoc 会报 `needs_ocr` 并点名页�
 ```go
 md, err := anydoc.ToMarkdownBytesWithOptions(pdf, &anydoc.FormatPdf, &anydoc.Options{
 	Ocr: anydoc.OcrHosted,
+})
+```
+
+`Options.ParseMode` 用于选择 anydoc 0.2.5 新增的 Parse PDF 模式：
+`ParseModeAuto`（零值）先提取文本、对无文本层页面回退 OCR；
+`ParseModeFast` 只提取文本；`ParseModeOCR` 对每一页都做 OCR。未知模式会在
+上传任何内容之前报错：
+
+```go
+md, err := anydoc.ToMarkdownBytesWithOptions(pdf, &anydoc.FormatPdf, &anydoc.Options{
+	Ocr:       anydoc.OcrHosted,
+	ParseMode: anydoc.ParseModeOCR,
 })
 ```
 
@@ -206,12 +222,14 @@ md, err := anydoc.ToMarkdownBytesWithOptions(pdf, &anydoc.FormatPdf, &anydoc.Opt
 
 1. **Rust C ABI** —— 本仓库同时也是一个 Rust crate（[Cargo.toml](Cargo.toml)），
    它封装了 crates.io 上发布的 `anydoc` crate（精确锁定版本，当前为
-   `=0.2.4`），并暴露一个精简的 C ABI（[src/lib.rs](src/lib.rs)）：
+   `=0.2.5`），并暴露一个精简的 C ABI（[src/lib.rs](src/lib.rs)）：
    `anydoc_to_markdown*`、`anydoc_to_document`、格式检测，以及配套的
    `_free` 释放函数。构建脚本将 anydoc 内部私有的 `document_to_markdown`
    序列化器重新导出，从而保留官方 GFM 渲染能力。
 2. **每个平台一个静态库** —— `crate-type = ["staticlib"]` 构建出
-   `libanydoc_go.a`（约 20 MB）。六个静态库提交在 [lib/](lib/) 目录下。
+   `libanydoc_go.a`（约 20 MB）。六个静态库提交在 [lib/](lib/) 目录下用于
+   `//go:embed`；同样的六个产物还会按平台打包发布到
+   [static release](https://github.com/nbbug/anydoc-go/releases/tag/static-v0.2.5)。
 3. **带构建标签的平台文件** —— 每个平台一个 Go 文件（
    [lib_linux_amd64.go](lib_linux_amd64.go) 等），由
    `//go:build linux && amd64 && cgo` 选中，并在其中通过 `#cgo LDFLAGS`
@@ -258,6 +276,54 @@ cgo 开启环境下执行 `go mod vendor`：它会捕获全部六个 `lib/<platf
 （远低于代理的 500 MB 上限，但值得知晓）。如果注册表或带宽对此敏感，
 一次性 vendor 是常见做法 —— 或者参考下面的动态库方案。
 
+## 单平台静态库下载
+
+`go get` 已经内嵌了所有平台的静态库，模块使用者无需额外下载。
+**Build static libraries** 工作流还会把每个平台的静态库单独打包，发布到
+[static-v0.2.5 release](https://github.com/nbbug/anydoc-go/releases/tag/static-v0.2.5)，
+供不经过 `go get`、直接使用静态库的场景：只拉取单个平台的 CI 缓存、自行
+填充的 vendored 代码树，或直接用 C ABI 链接静态库的非 Go 程序。
+
+这些压缩包并不会减小 Go 模块体积：`go get` 仍会下载全部六个平台，因为
+`//go:embed` 必须看到每个平台对应的文件。它们是给不需要该模块的消费者
+准备的按平台分发方式。
+
+| 平台          | 压缩包                                                                                                                                              |
+| ------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
+| linux/amd64   | [anydoc-static-linux_amd64.tar.gz](https://github.com/nbbug/anydoc-go/releases/download/static-v0.2.5/anydoc-static-linux_amd64.tar.gz)             |
+| linux/arm64   | [anydoc-static-linux_arm64.tar.gz](https://github.com/nbbug/anydoc-go/releases/download/static-v0.2.5/anydoc-static-linux_arm64.tar.gz)             |
+| darwin/amd64  | [anydoc-static-darwin_amd64.tar.gz](https://github.com/nbbug/anydoc-go/releases/download/static-v0.2.5/anydoc-static-darwin_amd64.tar.gz)           |
+| darwin/arm64  | [anydoc-static-darwin_arm64.tar.gz](https://github.com/nbbug/anydoc-go/releases/download/static-v0.2.5/anydoc-static-darwin_arm64.tar.gz)           |
+| windows/amd64 | [anydoc-static-windows_amd64.tar.gz](https://github.com/nbbug/anydoc-go/releases/download/static-v0.2.5/anydoc-static-windows_amd64.tar.gz)         |
+| windows/arm64 | [anydoc-static-windows_arm64.tar.gz](https://github.com/nbbug/anydoc-go/releases/download/static-v0.2.5/anydoc-static-windows_arm64.tar.gz)         |
+
+每个压缩包的目录结构与模块一致，并附带对应的 C 头文件：
+
+```
+lib/<platform>/libanydoc_go.a   # Windows 为 anydoc_go.lib
+include/anydoc.h
+```
+
+请从同一 release 下载
+[`SHA256SUMS`](https://github.com/nbbug/anydoc-go/releases/download/static-v0.2.5/SHA256SUMS)
+并校验：
+
+```
+sha256sum -c SHA256SUMS          # Linux
+shasum -a 256 -c SHA256SUMS      # macOS
+tar -xzf anydoc-static-linux_amd64.tar.gz
+```
+
+如果要在 vendored 副本中固定某个平台的静态库，把它解压覆盖到模块目录
+（每次重新执行 `go mod vendor` 后需要再解压一次）：
+
+```
+tar -xzf anydoc-static-linux_amd64.tar.gz -C vendor/github.com/nbbug/anydoc-go
+```
+
+压缩包里就是模块默认链接的同一个静态库，由同一个工作流构建，因此也可以供
+C、C++ 或其他语言绑定直接通过 [include/anydoc.h](include/anydoc.h) 调用。
+
 ## 动态库（可选）
 
 默认情况下模块链接内嵌的静态归档。使用 `anydoc_dynamic` 构建标签则改为链接
@@ -268,10 +334,11 @@ go build -tags anydoc_dynamic ./...
 ```
 
 模块本身不打包任何动态库 —— 共享库由 **Build dynamic libraries** 工作流
-构建，发布到 [releases 页面](https://github.com/nbbug/anydoc-go/releases)，
+构建，发布到
+[dynlib-v0.2.5 release](https://github.com/nbbug/anydoc-go/releases/tag/dynlib-v0.2.5)，
 每个平台一个 `anydoc-dynlib-<platform>.tar.gz`（布局为
-`lib/<platform>/<共享库>` + C 头文件）。下载对应平台的包，让它进入 cgo
-的搜索路径：
+`lib/<platform>/<共享库>` + C 头文件，并提供 `SHA256SUMS`）。下载对应平台的
+包，让它进入 cgo 的搜索路径：
 
 - 解压到 `lib` 目录，构建时用 `CGO_LDFLAGS` 指定平台目录（cgo 会把这些
   flags 追加到包自身 flags 之后）：
@@ -294,7 +361,7 @@ go build -tags anydoc_dynamic ./...
 
 只有升级 anydoc、修改 C ABI 或支持新平台时才需要；模块使用者无需关心。
 
-要求：Rust（rustup，任意较新的稳定版 —— anydoc 0.2.4 需要 ≥ 1.88），外加
+要求：Rust（rustup，任意较新的稳定版 —— anydoc 0.2.5 需要 ≥ 1.88），外加
 一种交叉编译工具链：`cross`（需要 Docker）或 `cargo-zigbuild`（自带 zig，
 无需 Docker）。
 
@@ -323,7 +390,8 @@ Windows 静态库用 MSVC 工具链在原生 Windows 上构建（CI 使用 Windo
 **Build static libraries** 工作流
 （[.github/workflows/build-libs.yml](.github/workflows/build-libs.yml)）
 会构建全部六个静态库，先通过 Go 包实际链接并转换做冒烟测试，然后把产物
-提交并推送到主分支：
+提交并推送到主分支，最后把每个平台一个的压缩包发布到 `static-v0.2.5`
+release（由 `release_tag` 输入指定；重复运行会更新同一个 release）：
 
 **Actions → “Build static libraries” → Run workflow。**
 
@@ -378,6 +446,10 @@ anydoc 在你的进程内解析不受信任的恶意输入：
 - 锁定的 anydoc 版本包含 pdf-inspector 针对此前无上界的 PDF 解析的修复
   （见 anydoc changelog）—— 升级锁定版本时应使用 `--locked` 重新构建，
   避免随意引入未经审计的版本。
+- anydoc 0.2.5 将 ZIP 系列格式升级到 `zip` 9.x（至少 9.5.1；当前
+  lockfile 锁定 9.7.3），修复了影响所有 8.x 版本的五个安全公告
+  （CVE-2026-115905 至 CVE-2026-115909）。静态库 release 产物也基于该
+  锁定版本重新构建。
 - 开启 `OcrHosted` 后，报 `needs_ocr` 的 PDF 会离开你的进程并上传到
   Firecrawl Parse（除非设置 `FIRECRAWL_API_KEY`，否则免密钥）。处理敏感
   文档前请先了解其服务条款；默认行为不会向任何外部服务发送任何内容。

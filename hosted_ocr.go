@@ -89,8 +89,13 @@ func parseHosted(pdf []byte, filename string, opts *Options) (string, error) {
 		apiURL = firecrawlDefaultAPIURL
 	}
 
+	mode, err := normalizeParseMode(opts.ParseMode)
+	if err != nil {
+		return "", err
+	}
+
 	parseOptions, err := json.Marshal(parseRequestOptions{
-		Parsers: []parseParser{{Type: "pdf", Mode: "auto"}},
+		Parsers: []parseParser{{Type: "pdf", Mode: string(mode)}},
 		Origin:  fmt.Sprintf("anydoc@%s", Version),
 	})
 	if err != nil {
@@ -150,6 +155,22 @@ func parseHosted(pdf []byte, filename string, opts *Options) (string, error) {
 		markdown += "\n"
 	}
 	return markdown, nil
+}
+
+// normalizeParseMode maps the zero value to auto and rejects unknown modes,
+// matching anydoc 0.2.5's validation before anything is sent to Parse.
+func normalizeParseMode(mode ParseMode) (ParseMode, error) {
+	switch mode {
+	case "":
+		return ParseModeAuto, nil
+	case ParseModeAuto, ParseModeFast, ParseModeOCR:
+		return mode, nil
+	default:
+		return "", &ConvertError{
+			Kind:   "unsupported",
+			Detail: fmt.Sprintf("unknown ParseMode %q", mode),
+		}
+	}
 }
 
 // multipartBody builds the Parse /v2/parse request body: the `options` JSON

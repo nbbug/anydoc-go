@@ -21,6 +21,25 @@ const (
 	OcrCustom OcrMode = "custom"
 )
 
+// ParseMode selects the Firecrawl Parse PDF mode used by OcrHosted, mirroring
+// the Node binding's `parseMode` and the Python binding's `parse_mode`.
+// anydoc 0.2.5 added these modes upstream.
+type ParseMode string
+
+const (
+	// ParseModeAuto is the default (also selected by the zero value): extract
+	// text and fall back to OCR for pages that have no text layer.
+	ParseModeAuto ParseMode = "auto"
+
+	// ParseModeFast extracts text only and never runs OCR, so a scanned page
+	// comes back empty instead of being OCRed.
+	ParseModeFast ParseMode = "fast"
+
+	// ParseModeOCR OCRs every page, even pages that already have a text
+	// layer. Use it when the PDF's text layer is unreliable.
+	ParseModeOCR ParseMode = "ocr"
+)
+
 // OcrHandler extracts Markdown from a PDF whose pages need OCR. Implement it
 // to plug in a local OCR model or any OCR service of your own; OcrHandlerFunc
 // adapts a plain function. The handler receives the whole PDF — the same
@@ -50,6 +69,12 @@ type Options struct {
 	// OcrHandler extracts the Markdown when Ocr is OcrCustom. Ignored for
 	// the other modes.
 	OcrHandler OcrHandler
+
+	// ParseMode selects the Firecrawl Parse PDF mode when Ocr is OcrHosted:
+	// ParseModeAuto (the zero value), ParseModeFast, or ParseModeOCR. Any
+	// other value is rejected before a request is sent. Ignored for the other
+	// Ocr modes.
+	ParseMode ParseMode
 
 	// APIKey authenticates the Firecrawl Parse request, raising the keyless
 	// rate limits. Empty falls back to the FIRECRAWL_API_KEY environment

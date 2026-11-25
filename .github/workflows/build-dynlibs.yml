@@ -13,7 +13,7 @@ on:
       release_tag:
         description: "Git tag of the release to create or update"
         required: false
-        default: "dynlib-v0.2.4"
+        default: "dynlib-v0.2.5"
 
 permissions:
   contents: write
@@ -143,9 +143,17 @@ jobs:
           pattern: dynlib-*
           path: staging
           merge-multiple: true
+      - name: Write checksums
+        run: |
+          cd staging
+          sha256sum anydoc-dynlib-*.tar.gz > SHA256SUMS
+          cat SHA256SUMS
       - name: Upload to release
         uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ github.event.inputs.release_tag }}
-          files: staging/*.tar.gz
+          files: |
+            staging/*.tar.gz
+            staging/SHA256SUMS
+          fail_on_unmatched_files: true
           generate_release_notes: true

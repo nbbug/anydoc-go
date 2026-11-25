@@ -1,11 +1,12 @@
 name: Build static libraries
 
-# Builds the anydoc static archives for every supported platform and pushes
-# them to the main branch. Trigger it manually (Actions → "Build static
-# libraries" → Run workflow) after changing the `anydoc = "=X.Y.Z"` pin in
-# Cargo.toml, after upgrading Rust tooling, or whenever the committed archives
-# fall out of date. The archives are ~20 MB each, so they are built on demand
-# rather than on every push.
+# Builds the anydoc static archives for every supported platform, commits them
+# to the main branch (where //go:embed picks them up), and publishes one
+# download-only tarball per platform to a GitHub release. Trigger it manually
+# (Actions → "Build static libraries" → Run workflow) after changing the
+# `anydoc = "=X.Y.Z"` pin in Cargo.toml, after upgrading Rust tooling, or
+# whenever the committed archives fall out of date. The archives are ~20 MB
+# each, so they are built on demand rather than on every push.
 #
 # Platform split across runners: Linux builds on ubuntu (native + cross),
 # Windows with MSVC on a native Windows runner (MSVC cannot be redistributed),
@@ -18,6 +19,10 @@ on:
         description: "Branch to commit the archives to"
         required: false
         default: "main"
+      release_tag:
+        description: "Git tag of the per-platform static-library release to create or update"
+        required: false
+        default: "static-v0.2.5"
 
 permissions:
   contents: write
@@ -68,6 +73,15 @@ jobs:
             cp include/anydoc.h staging/anydoc.h
             cp Cargo.lock staging/Cargo.lock 2>/dev/null || true
           fi
+      # One tarball per platform, downloadable without the six-archive module:
+      # the repository tree under lib/ plus the C header C consumers need.
+      - name: Package static archive
+        run: |
+          mkdir -p "pkg/lib/${{ matrix.dir }}"
+          cp "lib/${{ matrix.dir }}"/* "pkg/lib/${{ matrix.dir }}/"
+          mkdir -p pkg/include
+          cp include/anydoc.h pkg/include/
+          tar -czf "staging/anydoc-static-${{ matrix.dir }}.tar.gz" -C pkg .
       - uses: actions/upload-artifact@v7
         with:
           name: archives-${{ matrix.target }}
@@ -105,6 +119,14 @@ jobs:
         run: |
           mkdir -p staging/lib
           cp -R "lib/${{ matrix.dir }}" staging/lib/
+      - name: Package static archive
+        shell: bash
+        run: |
+          mkdir -p "pkg/lib/${{ matrix.dir }}"
+          cp "lib/${{ matrix.dir }}"/* "pkg/lib/${{ matrix.dir }}/"
+          mkdir -p pkg/include
+          cp include/anydoc.h pkg/include/
+          tar -czf "staging/anydoc-static-${{ matrix.dir }}.tar.gz" -C pkg .
       - uses: actions/upload-artifact@v7
         with:
           name: archives-${{ matrix.target }}
@@ -140,6 +162,13 @@ jobs:
         run: |
           mkdir -p staging/lib
           cp -R "lib/${{ matrix.dir }}" staging/lib/
+      - name: Package static archive
+        run: |
+          mkdir -p "pkg/lib/${{ matrix.dir }}"
+          cp "lib/${{ matrix.dir }}"/* "pkg/lib/${{ matrix.dir }}/"
+          mkdir -p pkg/include
+          cp include/anydoc.h pkg/include/
+          tar -czf "staging/anydoc-static-${{ matrix.dir }}.tar.gz" -C pkg .
       - uses: actions/upload-artifact@v7
         with:
           name: archives-${{ matrix.target }}
@@ -234,3 +263,71 @@ jobs:
           git add lib include/anydoc.h Cargo.lock
           git commit -m "chore: rebuild anydoc static libraries (anydoc v${version})"
           git push origin "HEAD:${{ github.event.inputs.branch }}"
+
+  # Publish the same archives as individual release assets. The module keeps
+  # embedding all six (the default `go get` experience), but users who only
+  # need one target can download that tarball instead of the ~120 MB module
+  # zip: CI caches, vendored trees, and non-Go consumers linking the C ABI.
+  release:
+    name: Publish static libraries
+    needs: [push]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download packages
+        uses: actions/download-artifact@v8
+        with:
+          pattern: archives-*
+          path: staging
+          merge-multiple: true
+      # A packaging mistake (missing archive, header, or platform) must fail
+      # here rather than ship a broken release asset.
+      - name: Verify packages
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          tarballs=(staging/anydoc-static-*.tar.gz)
+          if [ ${#tarballs[@]} -ne 6 ]; then
+            echo "error: expected 6 static tarballs, found ${#tarballs[@]}" >&2
+            exit 1
+          fi
+          for tarball in "${tarballs[@]}"; do
+            listing=$(tar -tzf "$tarball")
+            echo "$listing" | grep -qx './include/anydoc.h'
+            echo "$listing" | grep -Eq '^\./lib/[^/]+/(libanydoc_go\.a|anydoc_go\.lib)$'
+            echo "OK: $tarball"
+          done
+      - name: Write checksums
+        run: |
+          cd staging
+          sha256sum anydoc-static-*.tar.gz > SHA256SUMS
+          cat SHA256SUMS
+      - name: Upload to release
+        uses: softprops/action-gh-release@v3
+        with:
+          tag_name: ${{ github.event.inputs.release_tag }}
+          # Point the tag at the branch after the commit step, so the release
+          # is reproducible from the archives it ships (not the pre-build SHA).
+          target_commitish: ${{ github.event.inputs.branch }}
+          name: anydoc-go static libraries ${{ github.event.inputs.release_tag }}
+          body: |
+            Prebuilt anydoc-go static archives, one tarball per platform.
+            Each tarball lays out `lib/<platform>/<archive>` plus
+            `include/anydoc.h`, so it can be extracted over a checkout or a
+            vendored module. Module users do not need these: `go get` already
+            embeds the archive for every platform.
+
+            | Platform | Rust target | Asset |
+            | --- | --- | --- |
+            | linux/amd64 | `x86_64-unknown-linux-gnu` | `anydoc-static-linux_amd64.tar.gz` |
+            | linux/arm64 | `aarch64-unknown-linux-gnu` | `anydoc-static-linux_arm64.tar.gz` |
+            | darwin/amd64 | `x86_64-apple-darwin` | `anydoc-static-darwin_amd64.tar.gz` |
+            | darwin/arm64 | `aarch64-apple-darwin` | `anydoc-static-darwin_arm64.tar.gz` |
+            | windows/amd64 | `x86_64-pc-windows-msvc` | `anydoc-static-windows_amd64.tar.gz` |
+            | windows/arm64 | `aarch64-pc-windows-msvc` | `anydoc-static-windows_arm64.tar.gz` |
+
+            Verify with `sha256sum -c SHA256SUMS` (the checksums file is an
+            asset too).
+          files: |
+            staging/anydoc-static-*.tar.gz
+            staging/SHA256SUMS
+          fail_on_unmatched_files: true
