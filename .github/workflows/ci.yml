@@ -6,8 +6,8 @@ on:
   pull_request:
 
 jobs:
-  go:
-    name: Go tests
+  test:
+    name: Go and Rust tests
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -34,42 +34,30 @@ jobs:
           echo "anydoc pin: $cargo_version"
 
       # Stub builds: the package must compile and fail gracefully everywhere,
-      # with cgo disabled and without any archives.
+      # with cgo disabled and without any downloaded libraries.
       - name: Test without cgo (stub path)
         run: |
           CGO_ENABLED=0 go vet ./...
           CGO_ENABLED=0 go test ./...
 
-      # The `anydoc_dynamic` tag must keep compiling: vet does not link, so it needs
-      # only the committed header, not the downloaded shared libraries.
+      # The `anydoc_dynamic` tag must keep compiling: vet does not link, so it
+      # needs only the committed header, not a downloaded shared library.
       - name: Vet with the dynamic tag (no link)
         run: |
           go vet -tags anydoc_dynamic ./...
           CGO_ENABLED=0 go vet -tags anydoc_dynamic ./...
 
-      # Full cgo tests link the packaged archive. Skip until the archives have
-      # been pushed to main by the "Build static libraries" workflow — before
-      # the first run, lib/ is empty and go:embed cannot resolve.
-      - name: Test with cgo (linux/amd64 archive)
-        run: |
-          if [ ! -f lib/linux_amd64/libanydoc_go.a ]; then
-            echo "skip: lib/linux_amd64/libanydoc_go.a missing; run the 'Build static libraries' workflow first"
-            exit 0
-          fi
-          go vet ./...
-          go test ./...
-          go build ./examples/convert ./examples/parse
-
-  rust:
-    name: Rust build (check)
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v6
+      # The static libraries are release assets, not repository files. Build
+      # the host archive so the full cgo suite can actually link and run.
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
         with:
-          key: anydoc-go-check
-      # Compile-check the binding crate for the host target. The full
-      # multi-platform archives are built by the "Build static libraries"
-      # workflow; this catches source-level breakage on every push.
-      - run: ./scripts/build-anydoc-lib.sh
+          key: anydoc-go-ci
+      - name: Build linux/amd64 static library
+        run: ./scripts/build-anydoc-lib.sh
+
+      - name: Test with cgo (linux/amd64 static library)
+        run: |
+          go vet ./...
+          go test ./...
+          go build ./examples/convert ./examples/parse

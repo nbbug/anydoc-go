@@ -1,4 +1,5 @@
-# Rust build artifacts; the packaged archives in lib/ ARE committed.
+# Rust build artifacts. Prebuilt libraries live on the GitHub release, not in
+# the repository; local lib/ extraction directories are ignored.
 /target/
 /patched-anydoc/
 /.anydoc-unpack/
@@ -6,5 +7,4 @@
 zig-cache/
 .zig-cache/
 .DS_Store
-/dynlib/
 /lib/

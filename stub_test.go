@@ -7,8 +7,8 @@ import (
 	"testing"
 )
 
-// TestStubUnavailable runs on every build where the packaged library cannot
-// link (cgo disabled or unsupported platform). The package must compile and
+// TestStubUnavailable runs on every build where no cgo library can be linked
+// (cgo disabled or unsupported platform). The package must compile and
 // every function must fail with a helpful UnavailableError instead of
 // panicking or linking against a missing archive.
 func TestStubUnavailable(t *testing.T) {
@@ -33,13 +33,6 @@ func TestStubUnavailable(t *testing.T) {
 	if f, ok := FormatFromPath("/a/b.docx"); f != "" || ok {
 		t.Errorf("FormatFromPath: expected zero value and ok=false, got %q, %v", f, ok)
 	}
-	if lib := EmbeddedLib(); lib != nil {
-		t.Errorf("EmbeddedLib: expected nil in stub builds, got %d bytes", len(lib))
-	}
-	if _, err := ExtractLib(t.TempDir()); !IsUnavailable(err) {
-		t.Errorf("ExtractLib: expected UnavailableError, got %v", err)
-	}
-
 	// The message should name the fix, so users are not left guessing.
 	_, err := ToMarkdown("anything")
 	if !strings.Contains(err.Error(), "CGO_ENABLED=1") {

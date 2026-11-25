@@ -2,11 +2,11 @@
 
 package anydoc
 
-// This file is the fallback for builds that cannot link the packaged static
-// library: cgo disabled, or a platform with no prebuilt archive. Every
-// exported function keeps its signature and fails with a friendly
-// UnavailableError instead of a compile error, so code that imports the
-// package always builds. Check IsUnavailable to detect this at run time.
+// This file is the fallback for builds that cannot link a downloaded library:
+// cgo disabled, or an unsupported platform. Every exported function keeps its
+// signature and fails with a friendly UnavailableError instead of a compile
+// error, so code that imports the package always builds. Check IsUnavailable
+// to detect this at run time.
 
 // ToMarkdown converts a document file to Markdown.
 func ToMarkdown(path string) (string, error) {
@@ -54,16 +54,4 @@ func FormatFromExtension(ext string) (f Format, ok bool) {
 // FormatFromPath maps a path's extension to a Format.
 func FormatFromPath(path string) (f Format, ok bool) {
 	return "", false
-}
-
-// EmbeddedLib returns the bytes of the static archive for the current
-// platform. Stub builds package no archive.
-func EmbeddedLib() []byte {
-	return nil
-}
-
-// ExtractLib writes the embedded archive into dir. Stub builds have no
-// archive to write.
-func ExtractLib(dir string) (string, error) {
-	return "", unavailableError(unavailableDetail)
 }

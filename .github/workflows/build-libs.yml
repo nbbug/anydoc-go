@@ -1,34 +1,27 @@
-name: Build static libraries
+name: Build libraries
 
-# Builds the anydoc static archives for every supported platform, commits them
-# to the main branch (where //go:embed picks them up), and publishes one
-# download-only tarball per platform to a GitHub release. Trigger it manually
-# (Actions → "Build static libraries" → Run workflow) after changing the
-# `anydoc = "=X.Y.Z"` pin in Cargo.toml, after upgrading Rust tooling, or
-# whenever the committed archives fall out of date. The archives are ~20 MB
-# each, so they are built on demand rather than on every push.
+# Builds the static archive and the shared library for every supported
+# platform in one run, packages one tarball per platform and kind, and
+# publishes them all to a single GitHub release. Nothing is committed to the
+# repository: users download the tarball for their platform and point cgo at
+# it (see the README, "Prebuilt libraries").
 #
-# Platform split across runners: Linux builds on ubuntu (native + cross),
-# Windows with MSVC on a native Windows runner (MSVC cannot be redistributed),
-# and macOS on a macOS runner (Apple's SDK cannot be redistributed).
+# Trigger it manually (Actions → "Build libraries" → Run workflow) after
+# changing the `anydoc = "=X.Y.Z"` pin, the C ABI, or the platform matrix.
 
 on:
   workflow_dispatch:
     inputs:
-      branch:
-        description: "Branch to commit the archives to"
-        required: false
-        default: "main"
       release_tag:
-        description: "Git tag of the per-platform static-library release to create or update"
+        description: "Git tag of the release to create or update"
         required: false
-        default: "static-v0.2.5"
+        default: "libs-v0.2.5"
 
 permissions:
   contents: write
 
 jobs:
-  # Linux (glibc) archives. Linux/amd64 builds natively; Linux/arm64 uses
+  # Linux (glibc) libraries. Linux/amd64 builds natively; Linux/arm64 uses
   # cross.
   build-linux:
     name: Build linux (${{ matrix.target }})
@@ -40,9 +33,13 @@ jobs:
           - target: x86_64-unknown-linux-gnu
             tool: cargo
             dir: linux_amd64
+            static: libanydoc_go.a
+            shared: libanydoc_go.so
           - target: aarch64-unknown-linux-gnu
             tool: cross
             dir: linux_arm64
+            static: libanydoc_go.a
+            shared: libanydoc_go.so
     steps:
       - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
@@ -53,45 +50,29 @@ jobs:
         if: matrix.tool == 'cross'
         with:
           tool: cross
-      - name: Build archive
-        run: BUILD_TOOL=${{ matrix.tool }} TARGET=${{ matrix.target }} ./scripts/build-anydoc-lib.sh
-      # Each artifact carries only its own archive: the push job merges all
-      # artifacts into one tree, and download-artifact corrupts files whose
-      # path arrives from more than one artifact (collisions appended or
-      # truncated the merged files). One file per path across all artifacts
-      # keeps the merge lossless.
-      - name: Stage archive
+      - name: Build static and shared libraries
+        run: LIBS=both BUILD_TOOL=${{ matrix.tool }} TARGET=${{ matrix.target }} ./scripts/build-anydoc-lib.sh
+      - name: Package
         run: |
-          mkdir -p staging/lib
-          cp -R "lib/${{ matrix.dir }}" staging/lib/
-          # cbindgen regenerates include/anydoc.h during the build; the
-          # regenerated header is committed alongside the archives so the
-          # committed copy can never drift from the Rust source. Same for
-          # Cargo.lock on the first run. Only this job carries them: same
-          # single-source rule as the archives.
-          if [ "${{ matrix.dir }}" = linux_amd64 ]; then
-            cp include/anydoc.h staging/anydoc.h
-            cp Cargo.lock staging/Cargo.lock 2>/dev/null || true
-          fi
-      # One tarball per platform, downloadable without the six-archive module:
-      # the repository tree under lib/ plus the C header C consumers need.
-      - name: Package static archive
-        run: |
-          mkdir -p "pkg/lib/${{ matrix.dir }}"
-          cp "lib/${{ matrix.dir }}"/* "pkg/lib/${{ matrix.dir }}/"
-          mkdir -p pkg/include
-          cp include/anydoc.h pkg/include/
-          tar -czf "staging/anydoc-static-${{ matrix.dir }}.tar.gz" -C pkg .
+          mkdir -p "pkg-static/lib/${{ matrix.dir }}" pkg-static/include
+          mkdir -p "pkg-dynamic/lib/${{ matrix.dir }}" pkg-dynamic/include
+          cp "lib/${{ matrix.dir }}/${{ matrix.static }}" "pkg-static/lib/${{ matrix.dir }}/"
+          cp "lib/${{ matrix.dir }}/${{ matrix.shared }}" "pkg-dynamic/lib/${{ matrix.dir }}/"
+          cp include/anydoc.h pkg-static/include/
+          cp include/anydoc.h pkg-dynamic/include/
+          mkdir -p dist
+          tar -czf "dist/anydoc-static-${{ matrix.dir }}.tar.gz" -C pkg-static .
+          tar -czf "dist/anydoc-dynlib-${{ matrix.dir }}.tar.gz" -C pkg-dynamic .
       - uses: actions/upload-artifact@v7
         with:
-          name: archives-${{ matrix.target }}
-          path: staging
+          name: libs-${{ matrix.target }}
+          path: dist
           if-no-files-found: error
 
-  # Windows archives, built with the MSVC toolchain on a native Windows
-  # runner (matching the WeKnora binding). MSVC cannot be redistributed, so
-  # neither cross nor zig can produce these targets from Linux. The resulting
-  # COFF anydoc_go.lib is linked by the mingw gcc that Go's cgo uses.
+  # Windows libraries, built with the MSVC toolchain on a native Windows
+  # runner. MSVC cannot be redistributed, so neither cross nor zig can produce
+  # these targets from Linux. The resulting COFF anydoc_go.lib is linked by
+  # the mingw gcc that Go's cgo uses.
   build-windows:
     name: Build windows (${{ matrix.target }})
     runs-on: windows-2025
@@ -101,8 +82,12 @@ jobs:
         include:
           - target: x86_64-pc-windows-msvc
             dir: windows_amd64
+            static: anydoc_go.lib
+            shared: anydoc_go.dll
           - target: aarch64-pc-windows-msvc
             dir: windows_arm64
+            static: anydoc_go.lib
+            shared: anydoc_go.dll
     steps:
       - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
@@ -111,29 +96,28 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           key: anydoc-go-${{ matrix.target }}
-      - name: Build archive
+      - name: Build static and shared libraries
         shell: bash
-        run: TARGET=${{ matrix.target }} ./scripts/build-anydoc-lib.sh
-      - name: Stage archive
-        shell: bash
-        run: |
-          mkdir -p staging/lib
-          cp -R "lib/${{ matrix.dir }}" staging/lib/
-      - name: Package static archive
+        run: LIBS=both TARGET=${{ matrix.target }} ./scripts/build-anydoc-lib.sh
+      - name: Package
         shell: bash
         run: |
-          mkdir -p "pkg/lib/${{ matrix.dir }}"
-          cp "lib/${{ matrix.dir }}"/* "pkg/lib/${{ matrix.dir }}/"
-          mkdir -p pkg/include
-          cp include/anydoc.h pkg/include/
-          tar -czf "staging/anydoc-static-${{ matrix.dir }}.tar.gz" -C pkg .
+          mkdir -p "pkg-static/lib/${{ matrix.dir }}" pkg-static/include
+          mkdir -p "pkg-dynamic/lib/${{ matrix.dir }}" pkg-dynamic/include
+          cp "lib/${{ matrix.dir }}/${{ matrix.static }}" "pkg-static/lib/${{ matrix.dir }}/"
+          cp "lib/${{ matrix.dir }}/${{ matrix.shared }}" "pkg-dynamic/lib/${{ matrix.dir }}/"
+          cp include/anydoc.h pkg-static/include/
+          cp include/anydoc.h pkg-dynamic/include/
+          mkdir -p dist
+          tar -czf "dist/anydoc-static-${{ matrix.dir }}.tar.gz" -C pkg-static .
+          tar -czf "dist/anydoc-dynlib-${{ matrix.dir }}.tar.gz" -C pkg-dynamic .
       - uses: actions/upload-artifact@v7
         with:
-          name: archives-${{ matrix.target }}
-          path: staging
+          name: libs-${{ matrix.target }}
+          path: dist
           if-no-files-found: error
 
-  # macOS archives. Both architectures build on the arm64 runner: aarch64
+  # macOS libraries. Both architectures build on the arm64 runner: aarch64
   # natively, x86_64 through the universal Xcode toolchain (the crate tree is
   # pure Rust, so no C toolchain is needed). Apple's SDK cannot be
   # redistributed, so these cannot be built from Linux with cross.
@@ -146,8 +130,12 @@ jobs:
         include:
           - target: aarch64-apple-darwin
             dir: darwin_arm64
+            static: libanydoc_go.a
+            shared: libanydoc_go.dylib
           - target: x86_64-apple-darwin
             dir: darwin_amd64
+            static: libanydoc_go.a
+            shared: libanydoc_go.dylib
     steps:
       - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
@@ -156,178 +144,122 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           key: anydoc-go-${{ matrix.target }}
-      - name: Build archive
-        run: TARGET=${{ matrix.target }} ./scripts/build-anydoc-lib.sh
-      - name: Stage archive
+      - name: Build static and shared libraries
+        run: LIBS=both TARGET=${{ matrix.target }} ./scripts/build-anydoc-lib.sh
+      - name: Package
         run: |
-          mkdir -p staging/lib
-          cp -R "lib/${{ matrix.dir }}" staging/lib/
-      - name: Package static archive
-        run: |
-          mkdir -p "pkg/lib/${{ matrix.dir }}"
-          cp "lib/${{ matrix.dir }}"/* "pkg/lib/${{ matrix.dir }}/"
-          mkdir -p pkg/include
-          cp include/anydoc.h pkg/include/
-          tar -czf "staging/anydoc-static-${{ matrix.dir }}.tar.gz" -C pkg .
+          mkdir -p "pkg-static/lib/${{ matrix.dir }}" pkg-static/include
+          mkdir -p "pkg-dynamic/lib/${{ matrix.dir }}" pkg-dynamic/include
+          cp "lib/${{ matrix.dir }}/${{ matrix.static }}" "pkg-static/lib/${{ matrix.dir }}/"
+          cp "lib/${{ matrix.dir }}/${{ matrix.shared }}" "pkg-dynamic/lib/${{ matrix.dir }}/"
+          cp include/anydoc.h pkg-static/include/
+          cp include/anydoc.h pkg-dynamic/include/
+          mkdir -p dist
+          tar -czf "dist/anydoc-static-${{ matrix.dir }}.tar.gz" -C pkg-static .
+          tar -czf "dist/anydoc-dynlib-${{ matrix.dir }}.tar.gz" -C pkg-dynamic .
       - uses: actions/upload-artifact@v7
         with:
-          name: archives-${{ matrix.target }}
-          path: staging
+          name: libs-${{ matrix.target }}
+          path: dist
           if-no-files-found: error
 
-  # Smoke-test the fresh archives by linking the Go package against them
-  # before they land on main: a broken archive must fail the workflow, not
-  # reach users.
-  push:
-    name: Commit and push archives
+  release:
+    name: Publish libraries
     needs: [build-linux, build-windows, build-darwin]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
-        with:
-          ref: ${{ github.event.inputs.branch }}
-      - name: Download archives
-        uses: actions/download-artifact@v8
-        with:
-          pattern: archives-*
-          path: staging
-          merge-multiple: true
-      - name: Stage into repository
-        run: |
-          cp -R staging/lib/. lib/
-          cp -f staging/anydoc.h include/anydoc.h
-          cp -f staging/Cargo.lock Cargo.lock
-      # The merged artifacts must be byte-exact: parse every archive's member
-      # headers and require the file to end exactly at its last member. This
-      # is what catches artifact-merge corruption ("archive member invalid
-      # control bits" at link time was the symptom it shipped once).
-      - name: Verify staged archives
-        run: |
-          python3 - <<'PYEOF'
-          import pathlib, sys
-          archives = sorted(pathlib.Path("lib").rglob("*.a")) + sorted(pathlib.Path("lib").rglob("*.lib"))
-          if len(archives) != 6:
-              sys.exit(f"error: expected 6 staged archives, found {len(archives)}: {archives}")
-          for path in archives:
-              data = path.read_bytes()
-              if not data.startswith(b"!<arch>\n"):
-                  sys.exit(f"error: {path} does not start with an ar magic header")
-              members = 0
-              pos = 8
-              while pos < len(data):
-                  if len(data) - pos < 60:
-                      sys.exit(f"error: {path} has {len(data) - pos} stray bytes after the last member")
-                  size_field = data[pos + 48:pos + 58].rstrip(b" ")
-                  try:
-                      size = int(size_field)
-                  except ValueError:
-                      sys.exit(f"error: {path} member header at offset {pos} has a non-numeric size field")
-                  pos += 60 + size + (size & 1)  # members are padded to even length
-                  members += 1
-              if pos != len(data):
-                  sys.exit(f"error: {path} is {len(data) - pos} bytes longer than its members declare")
-              # Fat LTO merges each crate's code into one object, so a full
-              # build has ~280 members (thin LTO had ~650). The floor only
-              # catches archives truncated at a member boundary, which the
-              # exact-end check above cannot see.
-              if members < 100:
-                  sys.exit(f"error: {path} has only {members} members; expected a full build (280+)")
-              print(f"OK: {path} ({members} members, {len(data)} bytes)")
-          PYEOF
       - uses: actions/setup-go@v6
         with:
           go-version: "1.27.x"
-      - name: Smoke test (link + convert)
-        run: |
-          go build ./...
-          go test -run 'TestToMarkdownBytesCSV|TestToDocumentDocx|TestEmbeddedLibAndExtract|TestWireConstsMatchHeader' .
-      # No explicit token is configured here: actions/checkout above injects
-      # the workflow's GITHUB_TOKEN into the git config (persist-credentials
-      # defaults to true), and the workflow-level `permissions:
-      # contents: write` grants it push rights. Caveats: branch protection on
-      # the target branch rejects the push, and pushes made with GITHUB_TOKEN
-      # deliberately do not trigger other workflows (the archives commit does
-      # not re-run ci.yml).
-      - name: Commit and push
-        run: |
-          version=$(sed -n 's/^anydoc = "=\([^"]*\)".*/\1/p' Cargo.toml | head -1)
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          # git diff cannot see untracked files, and a newly added platform
-          # (lib/windows_arm64) arrives exactly as an untracked directory —
-          # the porcelain status covers both modified and untracked paths.
-          if [ -z "$(git status --porcelain lib include/anydoc.h Cargo.lock)" ]; then
-            echo "No changes; the committed archives are already current."
-            exit 0
-          fi
-          git add lib include/anydoc.h Cargo.lock
-          git commit -m "chore: rebuild anydoc static libraries (anydoc v${version})"
-          git push origin "HEAD:${{ github.event.inputs.branch }}"
-
-  # Publish the same archives as individual release assets. The module keeps
-  # embedding all six (the default `go get` experience), but users who only
-  # need one target can download that tarball instead of the ~120 MB module
-  # zip: CI caches, vendored trees, and non-Go consumers linking the C ABI.
-  release:
-    name: Publish static libraries
-    needs: [push]
-    runs-on: ubuntu-latest
-    steps:
       - name: Download packages
         uses: actions/download-artifact@v8
         with:
-          pattern: archives-*
-          path: staging
+          pattern: libs-*
+          path: dist
           merge-multiple: true
-      # A packaging mistake (missing archive, header, or platform) must fail
+      # A packaging mistake (missing platform, archive, or header) must fail
       # here rather than ship a broken release asset.
       - name: Verify packages
         run: |
           set -euo pipefail
           shopt -s nullglob
-          tarballs=(staging/anydoc-static-*.tar.gz)
-          if [ ${#tarballs[@]} -ne 6 ]; then
-            echo "error: expected 6 static tarballs, found ${#tarballs[@]}" >&2
+          static=(dist/anydoc-static-*.tar.gz)
+          dynamic=(dist/anydoc-dynlib-*.tar.gz)
+          if [ ${#static[@]} -ne 6 ] || [ ${#dynamic[@]} -ne 6 ]; then
+            echo "error: expected 6 static and 6 dynamic tarballs," \
+                 "found ${#static[@]} and ${#dynamic[@]}" >&2
             exit 1
           fi
-          for tarball in "${tarballs[@]}"; do
+          for tarball in "${static[@]}"; do
             listing=$(tar -tzf "$tarball")
             echo "$listing" | grep -qx './include/anydoc.h'
             echo "$listing" | grep -Eq '^\./lib/[^/]+/(libanydoc_go\.a|anydoc_go\.lib)$'
             echo "OK: $tarball"
           done
+          for tarball in "${dynamic[@]}"; do
+            listing=$(tar -tzf "$tarball")
+            echo "$listing" | grep -qx './include/anydoc.h'
+            echo "$listing" | grep -Eq '^\./lib/[^/]+/(libanydoc_go\.so|libanydoc_go\.dylib|anydoc_go\.dll)$'
+            echo "OK: $tarball"
+          done
+      # Link and run the Go suite against the actual release tarballs, so a
+      # broken package fails the workflow before it reaches users.
+      - name: Smoke test static package
+        run: |
+          set -euo pipefail
+          tar -xzf dist/anydoc-static-linux_amd64.tar.gz -C .
+          go test -count=1 ./...
+      - name: Smoke test dynamic package
+        run: |
+          set -euo pipefail
+          mkdir -p lib/linux_amd64 /tmp/anydoc-dyn
+          tar -xzf dist/anydoc-dynlib-linux_amd64.tar.gz -C /tmp/anydoc-dyn
+          cp /tmp/anydoc-dyn/lib/linux_amd64/libanydoc_go.so lib/linux_amd64/
+          LD_LIBRARY_PATH="$PWD/lib/linux_amd64" go test -count=1 -tags anydoc_dynamic ./...
       - name: Write checksums
         run: |
-          cd staging
-          sha256sum anydoc-static-*.tar.gz > SHA256SUMS
+          cd dist
+          sha256sum anydoc-*.tar.gz > SHA256SUMS
           cat SHA256SUMS
       - name: Upload to release
         uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ github.event.inputs.release_tag }}
-          # Point the tag at the branch after the commit step, so the release
-          # is reproducible from the archives it ships (not the pre-build SHA).
-          target_commitish: ${{ github.event.inputs.branch }}
-          name: anydoc-go static libraries ${{ github.event.inputs.release_tag }}
+          name: anydoc-go libraries ${{ github.event.inputs.release_tag }}
           body: |
-            Prebuilt anydoc-go static archives, one tarball per platform.
-            Each tarball lays out `lib/<platform>/<archive>` plus
-            `include/anydoc.h`, so it can be extracted over a checkout or a
-            vendored module. Module users do not need these: `go get` already
-            embeds the archive for every platform.
+            Prebuilt anydoc-go libraries for every supported platform, built
+            from the pinned anydoc crate. Nothing is committed to the
+            repository: download the tarball for your platform and point cgo
+            at it (see the README, "Prebuilt libraries").
 
-            | Platform | Rust target | Asset |
-            | --- | --- | --- |
-            | linux/amd64 | `x86_64-unknown-linux-gnu` | `anydoc-static-linux_amd64.tar.gz` |
-            | linux/arm64 | `aarch64-unknown-linux-gnu` | `anydoc-static-linux_arm64.tar.gz` |
-            | darwin/amd64 | `x86_64-apple-darwin` | `anydoc-static-darwin_amd64.tar.gz` |
-            | darwin/arm64 | `aarch64-apple-darwin` | `anydoc-static-darwin_arm64.tar.gz` |
-            | windows/amd64 | `x86_64-pc-windows-msvc` | `anydoc-static-windows_amd64.tar.gz` |
-            | windows/arm64 | `aarch64-pc-windows-msvc` | `anydoc-static-windows_arm64.tar.gz` |
+            **Static** — the default build (`go build ./...`):
 
-            Verify with `sha256sum -c SHA256SUMS` (the checksums file is an
-            asset too).
+            | Platform | Asset |
+            | --- | --- |
+            | linux/amd64 | `anydoc-static-linux_amd64.tar.gz` |
+            | linux/arm64 | `anydoc-static-linux_arm64.tar.gz` |
+            | darwin/amd64 | `anydoc-static-darwin_amd64.tar.gz` |
+            | darwin/arm64 | `anydoc-static-darwin_arm64.tar.gz` |
+            | windows/amd64 | `anydoc-static-windows_amd64.tar.gz` |
+            | windows/arm64 | `anydoc-static-windows_arm64.tar.gz` |
+
+            **Dynamic** — build with `-tags anydoc_dynamic`:
+
+            | Platform | Asset |
+            | --- | --- |
+            | linux/amd64 | `anydoc-dynlib-linux_amd64.tar.gz` |
+            | linux/arm64 | `anydoc-dynlib-linux_arm64.tar.gz` |
+            | darwin/amd64 | `anydoc-dynlib-darwin_amd64.tar.gz` |
+            | darwin/arm64 | `anydoc-dynlib-darwin_arm64.tar.gz` |
+            | windows/amd64 | `anydoc-dynlib-windows_amd64.tar.gz` |
+            | windows/arm64 | `anydoc-dynlib-windows_arm64.tar.gz` |
+
+            Each tarball lays out `lib/<platform>/<library>` plus
+            `include/anydoc.h`. Verify downloads with
+            `sha256sum -c SHA256SUMS` (`shasum -a 256 -c SHA256SUMS` on macOS).
           files: |
-            staging/anydoc-static-*.tar.gz
-            staging/SHA256SUMS
+            dist/anydoc-static-*.tar.gz
+            dist/anydoc-dynlib-*.tar.gz
+            dist/SHA256SUMS
           fail_on_unmatched_files: true

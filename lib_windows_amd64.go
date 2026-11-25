@@ -7,14 +7,20 @@ package anydoc
 */
 import "C"
 
-import _ "embed"
-
-// The archive is built with the MSVC toolchain (x86_64-pc-windows-msvc), so
-// it is a COFF .lib rather than a GNU .a. Go's cgo links with mingw gcc,
-// whose GNU ld reads MSVC .lib archives fine — this is the same pairing the
-// WeKnora binding ships.
+// Static build: the archive is not embedded in the module. Download
+// anydoc-static-windows_amd64.tar.gz from the GitHub release and extract it so
+// the ${SRCDIR}/lib/windows_amd64 search path above finds anydoc_go.lib, or point
+// CGO_LDFLAGS at the directory that holds it:
 //
-//go:embed lib/windows_amd64/anydoc_go.lib
-var embeddedLib []byte
-
-var embeddedLibName = "anydoc_go.lib"
+//   CGO_LDFLAGS="-L/path/to/lib/windows_amd64" go build ./...
+//
+// Extract only one kind (static or shared) into a given lib directory: when
+// both are present, the linker prefers the shared library.
+//
+// Windows uses the MSVC toolchain (x86_64-pc-windows-msvc or
+// aarch64-pc-windows-msvc), so the static archive is the COFF
+// anydoc_go.lib rather than a GNU .a. Go's cgo still links with mingw
+// gcc, whose GNU ld reads MSVC .lib archives fine; users need mingw-w64,
+// not Visual Studio.
+//
+// See the README's "Prebuilt libraries" section.

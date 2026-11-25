@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# Build the static archives for every supported platform and stage them into
-# lib/<platform>/.
+# Build the static archive and/or shared library for every supported platform
+# and stage them into lib/<platform>/. LIBS selects the outputs (static by
+# default; set LIBS=both for both).
 #
 # Platform matrix (see README):
 #   linux/amd64    x86_64-unknown-linux-gnu
@@ -23,8 +24,9 @@
 #     cross linker installed).
 #
 # Usage:
-#   scripts/build-all.sh                             # every platform
+#   scripts/build-all.sh                             # every platform, static
 #   scripts/build-all.sh linux_amd64 darwin_arm64    # a subset, by lib dir
+#   LIBS=both scripts/build-all.sh                   # static and shared
 set -euo pipefail
 
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
@@ -100,5 +102,6 @@ for target in "${linux_targets[@]}" "${darwin_targets[@]}" "${windows_targets[@]
   esac
 done
 
-echo "Done. Archives under lib/:"
-ls -lh lib/*/libanydoc_go.a lib/*/anydoc_go.lib 2>/dev/null || true
+echo "Done. Libraries under lib/:"
+ls -lh lib/*/libanydoc_go.a lib/*/anydoc_go.lib \
+  lib/*/libanydoc_go.so lib/*/libanydoc_go.dylib lib/*/anydoc_go.dll 2>/dev/null || true

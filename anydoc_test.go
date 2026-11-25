@@ -313,30 +313,6 @@ func formatPtr(f string) *Format {
 	return &v
 }
 
-// ---- Embedding ------------------------------------------------------------
-
-func TestEmbeddedLibAndExtract(t *testing.T) {
-	lib := EmbeddedLib()
-	if len(lib) < 1<<20 {
-		t.Fatalf("expected the embedded archive to be at least 1 MB, got %d bytes", len(lib))
-	}
-	dir := t.TempDir()
-	path, err := ExtractLib(dir)
-	if err != nil {
-		t.Fatalf("ExtractLib: %v", err)
-	}
-	st, err := os.Stat(path)
-	if err != nil {
-		t.Fatalf("stat %s: %v", path, err)
-	}
-	if st.Size() != int64(len(lib)) {
-		t.Errorf("extracted %d bytes, embedded %d", st.Size(), len(lib))
-	}
-	if !strings.Contains(path, Version) {
-		t.Errorf("extracted path should record the version, got %s", path)
-	}
-}
-
 // ---- Wire constants -------------------------------------------------------
 
 // TestWireConstsMatchHeader pins the pure-Go tag and error constants to the

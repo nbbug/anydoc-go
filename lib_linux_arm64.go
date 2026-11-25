@@ -7,9 +7,14 @@ package anydoc
 */
 import "C"
 
-import _ "embed"
-
-//go:embed lib/linux_arm64/libanydoc_go.a
-var embeddedLib []byte
-
-var embeddedLibName = "libanydoc_go.a"
+// Static build: the archive is not embedded in the module. Download
+// anydoc-static-linux_arm64.tar.gz from the GitHub release and extract it so
+// the ${SRCDIR}/lib/linux_arm64 search path above finds libanydoc_go.a, or point
+// CGO_LDFLAGS at the directory that holds it:
+//
+//   CGO_LDFLAGS="-L/path/to/lib/linux_arm64" go build ./...
+//
+// Extract only one kind (static or shared) into a given lib directory: when
+// both are present, the linker prefers the shared library.
+//
+// See the README's "Prebuilt libraries" section.

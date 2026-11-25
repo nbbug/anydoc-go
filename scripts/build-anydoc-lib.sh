@@ -1,18 +1,19 @@
 #!/usr/bin/env bash
-# Build the anydoc static archive that the Go package links at build time via
-# cgo, for a single target.
+# Build the anydoc static archive and/or shared library for a single target.
 #
-# The archive is a Rust build artifact (~30 MB), built from the pinned anydoc
-# crate (see Cargo.toml). scripts/build-all.sh runs this for every supported
-# platform and stages the archives into lib/<platform>/; the CI workflow
-# (`.github/workflows/build-libs.yml`) does the same and pushes them to main.
+# Both are Rust build artifacts produced by the pinned anydoc crate (see
+# Cargo.toml). They are published per platform from the "Build libraries"
+# workflow (`.github/workflows/build-libs.yml`) and downloaded by users; they
+# are not committed to the repository.
 #
 # Usage:
-#   scripts/build-anydoc-lib.sh                # host platform, plain cargo
+#   scripts/build-anydoc-lib.sh                # host platform, static archive
 #   TARGET=aarch64-unknown-linux-gnu scripts/build-anydoc-lib.sh
 #   TARGET=... BUILD_TOOL=cross scripts/build-anydoc-lib.sh    # cross (Docker)
 #   TARGET=... BUILD_TOOL=zigbuild scripts/build-anydoc-lib.sh # cargo-zigbuild
-#   DYLIB=1 TARGET=... ...                     # package the cdylib output
+#   LIBS=dynamic TARGET=... ...                # package the shared library
+#   LIBS=both TARGET=... ...                   # package both outputs
+#   DYLIB=1 TARGET=... ...                     # legacy alias for LIBS=dynamic
 #
 # BUILD_TOOL selects the Rust build driver:
 #   cargo    (default) plain cargo; the target must be installed and linkable
@@ -208,14 +209,31 @@ rm -f "target/$target/release/$lib_name" \
 
 "$build_tool" build --release $locked --target "$target"
 
+# LIBS selects what to package. The cargo build always produces both outputs
+# (crate-type = ["staticlib", "cdylib"]); this only controls which files are
+# copied into lib/<platform>/ and validated.
+libs=${LIBS:-}
+if [ -z "$libs" ]; then
+  if [ "${DYLIB:-}" = "1" ]; then
+    libs=dynamic
+  else
+    libs=static
+  fi
+fi
+case "$libs" in
+  static | dynamic | both) ;;
+  *)
+    echo "error: LIBS must be static, dynamic, or both (got '$libs')" >&2
+    exit 1
+    ;;
+esac
+
 dest="lib/$lib_dir"
 mkdir -p "$dest"
 
-# DYLIB=1 packages the cdylib output instead of the static archive (the Build
-# dynamic libraries workflow). The shared library is not embedded in the Go
-# module: `anydoc_dynamic`-tag builds locate it through the cgo search path
-# after the user downloads it from the GitHub release.
-if [ "${DYLIB:-}" = "1" ]; then
+# Copy the cdylib output. Users download it from the GitHub release;
+# `anydoc_dynamic`-tag builds locate it through the cgo search path.
+copy_shared() {
   case "$target" in
     *pc-windows-msvc)
       cp "target/$target/release/anydoc_go.dll" "$dest/anydoc_go.dll"
@@ -229,6 +247,10 @@ if [ "${DYLIB:-}" = "1" ]; then
       ;;
   esac
   echo "Wrote $dest (dynamic)"
+}
+
+if [ "$libs" = dynamic ]; then
+  copy_shared
   exit 0
 fi
 
@@ -344,4 +366,8 @@ if pos != len(data):
 PYEOF
 fi
 
-echo "Wrote $dest/$lib_name"
+if [ "$libs" = both ]; then
+  copy_shared
+fi
+
+echo "Wrote $dest/$lib_name (static)"

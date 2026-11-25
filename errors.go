@@ -63,7 +63,7 @@ func (e *ConvertError) Error() string {
 }
 
 // UnavailableError reports that the static library cannot be used in the
-// current build: cgo was disabled, or the platform has no packaged archive.
+// current build: cgo was disabled, or the platform has no release library.
 // Every exported function returns it (or a nil/zero result) in that case, so
 // the package always compiles — the stub simply fails at run time with an
 // explanation.
@@ -97,8 +97,8 @@ func isNeedsOcr(err error) bool {
 
 // unavailableDetail is the message stub builds return. It names the supported
 // matrix so the failure is self-explanatory.
-const unavailableDetail = "no prebuilt anydoc static library for this build: " +
-	"the module packages archives for linux/amd64, linux/arm64, darwin/amd64, " +
-	"darwin/arm64, windows/amd64, and windows/arm64, and requires CGO_ENABLED=1. " +
-	"Build with cgo on one of these platforms, or build the archive from " +
-	"source for another target (see scripts/build-all.sh)."
+const unavailableDetail = "no anydoc static library for this build: download " +
+	"the archive for linux/amd64, linux/arm64, darwin/amd64, darwin/arm64, " +
+	"windows/amd64, or windows/arm64 from the GitHub release, and build with " +
+	"CGO_ENABLED=1 on one of these platforms. Another target can be built " +
+	"from source (see scripts/build-all.sh)."
