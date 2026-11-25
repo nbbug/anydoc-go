@@ -123,7 +123,7 @@ jobs:
   # redistributed, so these cannot be built from Linux with cross.
   build-darwin:
     name: Build darwin (${{ matrix.target }})
-    runs-on: macos-14
+    runs-on: macos-latest
     strategy:
       fail-fast: false
       matrix:
