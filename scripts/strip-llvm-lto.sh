@@ -467,13 +467,35 @@ fi
 # entries for PE import objects, so the result resolves like the archive Rust
 # wrote; what it writes is still a normal COFF static library, which mingw's ld
 # (what cgo uses) and LLD both read.
+#
+# The member list goes through a response file: a Windows static library has
+# over a thousand members, and passing that many names as arguments overflows
+# the 32 KiB command line Windows gives a process. An archiver without
+# response-file support gets the list appended in chunks instead (`q` appends,
+# `s` then builds the index).
 members=()
 while IFS=$'\t' read -r member _kind; do
   members+=("${member##*/}")
 done <"$work/manifest"
 [ "${#members[@]}" -gt 0 ] || die "nothing to repack for $archive"
-(cd "$work/out" && "$ar" rcs "$work/stripped" "${members[@]}") ||
-  die "cannot repack $archive"
+printf '%s\n' "${members[@]}" >"$work/out/.members"
+if ! (cd "$work/out" && "$ar" rcs "$work/stripped" @.members) 2>"$work/repack.err"; then
+  rm -f "$work/stripped"
+  chunk=()
+  for name in "${members[@]}"; do
+    chunk+=("$name")
+    if [ "${#chunk[@]}" -ge 100 ]; then
+      (cd "$work/out" && "$ar" q "$work/stripped" "${chunk[@]}") ||
+        die "cannot repack $archive: $(cat "$work/repack.err")"
+      chunk=()
+    fi
+  done
+  if [ "${#chunk[@]}" -gt 0 ]; then
+    (cd "$work/out" && "$ar" q "$work/stripped" "${chunk[@]}") ||
+      die "cannot repack $archive: $(cat "$work/repack.err")"
+  fi
+  (cd "$work/out" && "$ar" s "$work/stripped") || die "cannot index $work/stripped"
+fi
 
 # Gate on the bytes Go will actually see, not on the transform's opinion of
 # itself: the repacked archive is rescanned, and only then replaces the input.

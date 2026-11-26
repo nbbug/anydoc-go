@@ -120,7 +120,11 @@ def main(argv):
     unpacked = 0
     for index, (name, body) in enumerate(members(data, archive)):
         safe = "".join(c if c.isalnum() or c in "._-" else "_" for c in name)
-        path = os.path.join(dest, "m%04d-%s" % (index, safe or "member"))
+        # Cap the generated file name: prebuilt std members carry build paths in
+        # their names (up to ~170 characters), and the temporary path plus that
+        # name must stay under Windows' 260-character path limit. Names are
+        # cosmetic -- the archive index maps symbols to members.
+        path = os.path.join(dest, "m%04d-%s" % (index, (safe or "member")[:60]))
         with open(path, "wb") as handle:
             handle.write(body)
         sys.stdout.write("%s\t%s\n" % (path, classify(body)))
