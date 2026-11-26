@@ -422,6 +422,12 @@ Rust 工具链会把这段 IR 嵌进所有 staticlib，无法通过 `Cargo.toml`
   成员（`advapi32.dll`、`bcryptprimitives.dll` 等），`ar x` 会静默地只保留
   最后一个，从而丢掉链接器需要的符号。import object 本身原样保留（它没有
   section，`objcopy` 也无法解析），重新打包时会重建索引，包含 import 符号。
+- Windows 库在构建时关闭 LTO（脚本对 MSVC 目标设置
+  `CARGO_PROFILE_RELEASE_LTO=false`）。fat LTO 会把整个依赖图合并成单个
+  COFF object，而这个图超过了 COFF 的 65279 个 section 上限，rustc 于是输出
+  bigobj 成员；Go 的 cgo 链接输入检查完全无法解析 bigobj，单纯剔除 section
+  并不能让这种归档可链接。关掉 LTO 后每个 object 都很小（这里最大约 1.1 万
+  个 section）。
 
 `scripts/strip-llvm-lto.sh --check <archive>` 只校验、不修改；构建脚本和
 **Build libraries** 工作流都会在仍含该 IR 时报错，而不是照常发布。

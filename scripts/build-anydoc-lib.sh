@@ -192,6 +192,16 @@ case "$target" in
 esac
 export RUSTFLAGS="${RUSTFLAGS:-} $rustflags"
 
+# Windows archives must not be built with LTO (see the profile note in
+# Cargo.toml): fat LTO merges the whole graph into one object, this graph
+# crosses COFF's 65279-section limit, and rustc then emits a "bigobj" member
+# that Go's cgo linker-input check cannot parse at all -- no amount of section
+# stripping makes such an archive linkable. Cargo's per-profile environment
+# override keeps the Cargo.toml setting for every other platform.
+case "$target" in
+  *pc-windows-msvc) export CARGO_PROFILE_RELEASE_LTO=false ;;
+esac
+
 # Rebuild our own crate unconditionally: rust-cache restores target/ across
 # runs, and a poisoned fingerprint there is exactly the kind of staleness this
 # workflow must not ship (a stale archive links fine for every symbol except

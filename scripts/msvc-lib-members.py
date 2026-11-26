@@ -20,6 +20,8 @@ Usage:
 Stdout: one "<path>\t<kind>" line per member, where kind is
     object  a regular COFF object (objcopy can rewrite it)
     import  a PE import object (no sections; carry it through untouched)
+    bigobj  an ANON_OBJECT_HEADER_BIGOBJ member: more than 65279 sections,
+            which Go's cgo linker-input check cannot parse at all
     other   anything else (the caller refuses rather than ship it blind)
 """
 
@@ -39,11 +41,17 @@ def classify(body):
     """Say what a member is, using the PE/COFF header layouts."""
     if len(body) >= 20:
         # PE import object: Sig1=0, Sig2=0xFFFF, Version=0, then the machine.
+        # BigObj shares Sig1/Sig2 with Version=2 and a 56-byte header.
         sig1, sig2, version, machine = struct.unpack_from("<HHHH", body, 0)
-        if sig1 == 0 and sig2 == 0xFFFF and version == 0 and machine in MACHINES:
-            size_of_data = struct.unpack_from("<I", body, 12)[0]
-            if 20 + size_of_data == len(body):
-                return "import"
+        if sig1 == 0 and sig2 == 0xFFFF:
+            if version == 0 and machine in MACHINES:
+                size_of_data = struct.unpack_from("<I", body, 12)[0]
+                if 20 + size_of_data == len(body):
+                    return "import"
+            if version == 2 and machine in MACHINES:
+                sections = struct.unpack_from("<I", body, 44)[0]
+                if sections > 0 and 56 + 40 * sections <= len(body):
+                    return "bigobj"
         # Regular COFF object: machine, section count, optional header size.
         machine, sections = struct.unpack_from("<HH", body, 0)
         optional = struct.unpack_from("<H", body, 16)[0]

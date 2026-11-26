@@ -454,6 +454,12 @@ makes a source build depend on the stripper's tools as well:
   dropping symbols the linker needs. The import objects themselves are carried
   through untouched — they have no sections, and `objcopy` cannot parse them —
   while the repack rebuilds the archive index, import symbols included.
+- Windows archives are built with LTO off (the build script sets
+  `CARGO_PROFILE_RELEASE_LTO=false` for MSVC targets). Fat LTO merges the whole
+  graph into one COFF object, this graph passes COFF's 65279-section limit, and
+  rustc then emits a `bigobj` member that Go's cgo linker-input check cannot
+  parse at all — stripping sections cannot make such an archive linkable.
+  Without LTO every object stays small (the largest is ~11k sections here).
 
 `scripts/strip-llvm-lto.sh --check <archive>` verifies an archive without
 changing it; the build script and the **Build libraries** workflow both fail

@@ -317,8 +317,16 @@ scan_archive() {
   extract_members "$target" "$dir" >"$work/scan.manifest" ||
     die "cannot unpack $target"
   while IFS=$'\t' read -r member kind; do
-    [ "$kind" = object ] || continue
     base=${member##*/}
+    case "$kind" in
+      object) ;;
+      bigobj)
+        printf '%s: COFF bigobj (Go cannot parse it)\n' "$base"
+        found=1
+        continue
+        ;;
+      *) continue ;;
+    esac
     case "$format" in
       macho)
         hits=$(macho_lto_ir "$member")
@@ -373,8 +381,10 @@ if [ "$mode" = check ]; then
     printf '%s: %s carries no LLVM LTO IR\n' "$prog" "$archive"
     exit 0
   fi
-  printf '%s: %s carries LLVM LTO IR that the go command rejects:\n' "$prog" "$archive" >&2
-  printf '%s\n' "$findings" >&2
+  printf '%s: %s carries what the go command rejects in #cgo LDFLAGS:\n' "$prog" "$archive" >&2
+  printf '%s\n' "$findings" | awk 'NR <= 20' >&2
+  total=$(printf '%s\n' "$findings" | wc -l | tr -d ' ')
+  [ "$total" -le 20 ] || printf '... and %d more\n' "$((total - 20))" >&2
   exit 1
 fi
 
@@ -395,7 +405,10 @@ while IFS=$'\t' read -r member kind; do
       continue
       ;;
     object) ;;
-    *) die "member '$base' of $archive is neither a COFF object nor a PE import object" ;;
+    bigobj)
+      die "member '$base' of $archive is a COFF bigobj: the build exceeds COFF's 65279-section limit, which fat LTO merging causes. Go's cgo linker-input check cannot parse bigobj, so build this archive with LTO off (build-anydoc-lib.sh sets CARGO_PROFILE_RELEASE_LTO=false for Windows)"
+      ;;
+    *) die "member '$base' of $archive is neither a COFF object, a PE import object, nor a bigobj" ;;
   esac
 
   case "$format" in
