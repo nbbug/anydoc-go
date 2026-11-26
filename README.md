@@ -6,11 +6,11 @@ Go bindings for [anydoc](https://github.com/firecrawl/anydoc) — the Rust
 library that converts Word, PowerPoint, Excel, OpenDocument, RTF, EPUB, CSV,
 and PDF documents to GitHub-Flavored Markdown.
 
-anydoc-go links anydoc as a **static library through cgo** by default, or as
-a shared library with the `anydoc_dynamic` build tag. The libraries are not
+anydoc-go links anydoc as a **shared library through cgo**. The library is not
 packaged in the Go module: the **Build libraries** workflow publishes one
 tarball per platform on the GitHub release, and you point cgo at the one you
-downloaded. Users never install Rust or any other toolchain.
+downloaded. The library is loaded at run time, so it ships with your program.
+Users never install Rust or any other toolchain.
 
 ## Requirements
 
@@ -27,17 +27,20 @@ downloaded. Users never install Rust or any other toolchain.
 go get github.com/nbbug/anydoc-go
 ```
 
-`go get` fetches the Go package only. Download the static tarball for your
-platform from the [libs-v0.2.5 release](#prebuilt-libraries-download), extract
-it, and point `CGO_LDFLAGS` at its `lib/<platform>` directory:
+`go get` fetches the Go package only. Download the shared-library tarball for
+your platform from the [libs-v0.2.5 release](#prebuilt-libraries-download),
+extract it, and point `CGO_LDFLAGS` at its `lib/<platform>` directory:
 
 ```
-tar -xzf anydoc-static-linux_amd64.tar.gz -C anydoc-lib
+tar -xzf anydoc-dynlib-linux_amd64.tar.gz -C anydoc-lib
 CGO_LDFLAGS="-L$(pwd)/anydoc-lib/lib/linux_amd64" go build ./...
+LD_LIBRARY_PATH="$(pwd)/anydoc-lib/lib/linux_amd64" ./myapp
 ```
 
 Windows uses the same `-L` flag inside `CGO_LDFLAGS`; set the variable with
-`$env:CGO_LDFLAGS = "-L..."` in PowerShell.
+`$env:CGO_LDFLAGS = "-L..."` in PowerShell, and place `anydoc_go.dll` next to
+the executable. The library is loaded at run time, so the loader has to find
+it (see [Prebuilt libraries](#prebuilt-libraries-download)).
 
 ## Quickstart
 
@@ -81,9 +84,9 @@ go run ./examples/parse   -file report.docx
 ## Supported platforms
 
 The Go compiler selects the platform file for each combination below with
-build tags. Download the matching static archive or shared library from the
-release; each is a single file under `lib/<platform>/`: `libanydoc_go.a`
-everywhere except Windows, which uses the MSVC COFF archive `anydoc_go.lib`.
+build tags. Download the matching shared library from the release; it lands
+under `lib/<platform>/`: `libanydoc_go.so`, `libanydoc_go.dylib`, or
+`anydoc_go.dll` plus its import library on Windows.
 
 | Platform      | Rust target                 | C toolchain used for linking |
 | ------------- | --------------------------- | ---------------------------- |
@@ -97,13 +100,14 @@ everywhere except Windows, which uses the MSVC COFF archive `anydoc_go.lib`.
 Notes:
 
 - **Windows uses MSVC targets** (`x86_64-pc-windows-msvc` and
-  `aarch64-pc-windows-msvc`), matching the WeKnora binding. The archives are
-  built with the MSVC toolchain (which cannot be redistributed, so only a
-  native Windows host or the CI Windows runner can build them) and produce
-  `anydoc_go.lib`. Go's cgo still links with mingw gcc — GNU ld reads MSVC
-  `.lib` archives — so users need the standard mingw-w64 toolchain, not
-  Visual Studio.
-- **Linux is glibc.** Alpine/musl users must rebuild the archive
+  `aarch64-pc-windows-msvc`), matching the WeKnora binding. The DLL is built
+  with the MSVC toolchain (which cannot be redistributed, so only a native
+  Windows host or the CI Windows runner can build it) and ships with its import
+  library. Go's cgo links it with mingw gcc — GNU ld reads MSVC import
+  libraries — so users need the standard mingw-w64 toolchain, not Visual
+  Studio. At run time `anydoc_go.dll` must sit next to the executable or on
+  `PATH`.
+- **Linux is glibc.** Alpine/musl users must rebuild the library
   (`./scripts/build-all.sh linux_amd64` inside an Alpine image or with
   `cargo-zigbuild`, then pass or publish that artifact). musl cannot be auto-detected by Go build
   tags, so the reference WeKnora binding ships a parallel `-tags musl` variant;
@@ -244,18 +248,16 @@ conversion (and on the machine, except for `OcrHosted`).
    format detection, and matching `_free` functions. A build script
    re-exports anydoc's crate-private `document_to_markdown` serializer so the
    official GFM rendering stays available.
-2. **One static archive and one shared library per platform** —
-   `crate-type = ["staticlib", "cdylib"]` builds `libanydoc_go.a` and the
-   platform's shared library. The **Build libraries** workflow publishes both
-   for every platform; neither is committed to the module.
-3. **Platform files with build tags** — one Go file per platform per kind
-   ([lib_linux_amd64.go](lib_linux_amd64.go),
-   [lib_linux_amd64_dynamic.go](lib_linux_amd64_dynamic.go), …) is selected by
-   `//go:build linux && amd64 && cgo` (plus `anydoc_dynamic` for the shared
-   variant) and carries the `#cgo LDFLAGS`:
-   `-L${SRCDIR}/lib/linux_amd64 -lanydoc_go …` for both static and dynamic.
-   A downloaded tarball extracted into that directory is found automatically;
-   otherwise `CGO_LDFLAGS` supplies the search path.
+2. **One shared library per platform** — `crate-type = ["cdylib"]` builds the
+   platform's shared library (`.so`, `.dylib`, or `.dll` with its import
+   library). The **Build libraries** workflow publishes it for every platform;
+   nothing is committed to the module.
+3. **Platform files with build tags** — one Go file per platform
+   ([lib_linux_amd64.go](lib_linux_amd64.go), …) is selected by
+   `//go:build linux && amd64 && cgo` and carries the `#cgo LDFLAGS`:
+   `-L${SRCDIR}/lib/linux_amd64 -lanydoc_go`. A downloaded tarball extracted
+   into that directory is found automatically; otherwise `CGO_LDFLAGS`
+   supplies the search path, and the loader needs it at run time.
 4. **A user-friendly API** — [anydoc.go](anydoc.go) hides every pointer and
    free call behind plain Go functions, pins the goroutine during ABI calls
    (the error slot is thread-local), and bounds-decodes the document buffer
@@ -263,11 +265,10 @@ conversion (and on the machine, except for `OcrHosted`).
 
 ## Build tags and the stub
 
-| Build                                                     | Files compiled                             | Behavior                                                      |
-| --------------------------------------------------------- | ------------------------------------------ | ------------------------------------------------------------- |
-| cgo, supported platform                                   | static platform file + [anydoc.go](anydoc.go) | links the downloaded static archive, full functionality    |
-| cgo, supported platform, `-tags anydoc_dynamic`           | dynamic platform file + [anydoc.go](anydoc.go) | links the downloaded shared library                       |
-| `CGO_ENABLED=0` or unsupported platform                   | [anydoc_stub.go](anydoc_stub.go)           | compiles; every function returns a helpful `UnavailableError` |
+| Build                                   | Files compiled                          | Behavior                                                      |
+| --------------------------------------- | --------------------------------------- | ------------------------------------------------------------- |
+| cgo, supported platform                 | platform file + [anydoc.go](anydoc.go)  | links the downloaded shared library, full functionality       |
+| `CGO_ENABLED=0` or unsupported platform | [anydoc_stub.go](anydoc_stub.go)        | compiles; every function returns a helpful `UnavailableError` |
 
 ```go
 md, err := anydoc.ToMarkdownBytes(data, nil)
@@ -279,7 +280,9 @@ if err != nil && anydoc.IsUnavailable(err) {
 
 The stub keeps the package importable where cgo is unavailable. On a supported
 platform with cgo enabled, a missing library fails at link time with the
-compiler's normal error; the download step above is what supplies it.
+compiler's normal error; the download step above is what supplies it. There is
+no build tag to select an implementation: cgo plus a supported platform always
+means the shared library.
 
 ## Vendoring
 
@@ -292,50 +295,35 @@ vendor tree:
 
 ```
 go mod vendor
-tar -xzf anydoc-static-linux_amd64.tar.gz -C vendor/github.com/nbbug/anydoc-go
+tar -xzf anydoc-dynlib-linux_amd64.tar.gz -C vendor/github.com/nbbug/anydoc-go
 go build -mod=vendor ./...
 ```
 
 For a local checkout or a `replace` directive, extract the tarball at the
-module root instead. Dynamic builds can use `CGO_LDFLAGS` for the same purpose;
-see [Prebuilt libraries](#prebuilt-libraries-download).
+module root instead. Point `CGO_LDFLAGS` at the directory when it lives
+elsewhere, and remember to put it on the loader path at run time; see
+[Prebuilt libraries](#prebuilt-libraries-download).
 
 ## Prebuilt libraries (download)
 
 The [libs-v0.2.5 release](https://github.com/nbbug/anydoc-go/releases/tag/libs-v0.2.5)
-carries a static archive and a shared library for every supported platform,
-plus [`SHA256SUMS`](https://github.com/nbbug/anydoc-go/releases/download/libs-v0.2.5/SHA256SUMS).
-Nothing is packaged in the Go module, so download only the platform and kind
-you need.
+carries the shared library for every supported platform, plus
+[`SHA256SUMS`](https://github.com/nbbug/anydoc-go/releases/download/libs-v0.2.5/SHA256SUMS).
+Nothing is packaged in the Go module, so download only the platform you need.
 
-| Platform      | Static (default build)                                                                                                                     | Dynamic (`anydoc_dynamic`)                                                                                                                    |
-| ------------- | ------------------------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------- |
-| linux/amd64   | [anydoc-static-linux_amd64.tar.gz](https://github.com/nbbug/anydoc-go/releases/download/libs-v0.2.5/anydoc-static-linux_amd64.tar.gz)       | [anydoc-dynlib-linux_amd64.tar.gz](https://github.com/nbbug/anydoc-go/releases/download/libs-v0.2.5/anydoc-dynlib-linux_amd64.tar.gz)         |
-| linux/arm64   | [anydoc-static-linux_arm64.tar.gz](https://github.com/nbbug/anydoc-go/releases/download/libs-v0.2.5/anydoc-static-linux_arm64.tar.gz)       | [anydoc-dynlib-linux_arm64.tar.gz](https://github.com/nbbug/anydoc-go/releases/download/libs-v0.2.5/anydoc-dynlib-linux_arm64.tar.gz)         |
-| darwin/amd64  | [anydoc-static-darwin_amd64.tar.gz](https://github.com/nbbug/anydoc-go/releases/download/libs-v0.2.5/anydoc-static-darwin_amd64.tar.gz)     | [anydoc-dynlib-darwin_amd64.tar.gz](https://github.com/nbbug/anydoc-go/releases/download/libs-v0.2.5/anydoc-dynlib-darwin_amd64.tar.gz)       |
-| darwin/arm64  | [anydoc-static-darwin_arm64.tar.gz](https://github.com/nbbug/anydoc-go/releases/download/libs-v0.2.5/anydoc-static-darwin_arm64.tar.gz)     | [anydoc-dynlib-darwin_arm64.tar.gz](https://github.com/nbbug/anydoc-go/releases/download/libs-v0.2.5/anydoc-dynlib-darwin_arm64.tar.gz)       |
-| windows/amd64 | [anydoc-static-windows_amd64.tar.gz](https://github.com/nbbug/anydoc-go/releases/download/libs-v0.2.5/anydoc-static-windows_amd64.tar.gz)   | [anydoc-dynlib-windows_amd64.tar.gz](https://github.com/nbbug/anydoc-go/releases/download/libs-v0.2.5/anydoc-dynlib-windows_amd64.tar.gz)     |
-| windows/arm64 | [anydoc-static-windows_arm64.tar.gz](https://github.com/nbbug/anydoc-go/releases/download/libs-v0.2.5/anydoc-static-windows_arm64.tar.gz)   | [anydoc-dynlib-windows_arm64.tar.gz](https://github.com/nbbug/anydoc-go/releases/download/libs-v0.2.5/anydoc-dynlib-windows_arm64.tar.gz)     |
+| Platform      | Asset                                                                                                                                          |
+| ------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
+| linux/amd64   | [anydoc-dynlib-linux_amd64.tar.gz](https://github.com/nbbug/anydoc-go/releases/download/libs-v0.2.5/anydoc-dynlib-linux_amd64.tar.gz)           |
+| linux/arm64   | [anydoc-dynlib-linux_arm64.tar.gz](https://github.com/nbbug/anydoc-go/releases/download/libs-v0.2.5/anydoc-dynlib-linux_arm64.tar.gz)           |
+| darwin/amd64  | [anydoc-dynlib-darwin_amd64.tar.gz](https://github.com/nbbug/anydoc-go/releases/download/libs-v0.2.5/anydoc-dynlib-darwin_amd64.tar.gz)         |
+| darwin/arm64  | [anydoc-dynlib-darwin_arm64.tar.gz](https://github.com/nbbug/anydoc-go/releases/download/libs-v0.2.5/anydoc-dynlib-darwin_arm64.tar.gz)         |
+| windows/amd64 | [anydoc-dynlib-windows_amd64.tar.gz](https://github.com/nbbug/anydoc-go/releases/download/libs-v0.2.5/anydoc-dynlib-windows_amd64.tar.gz)       |
+| windows/arm64 | [anydoc-dynlib-windows_arm64.tar.gz](https://github.com/nbbug/anydoc-go/releases/download/libs-v0.2.5/anydoc-dynlib-windows_arm64.tar.gz)       |
 
-A static tarball contains `lib/<platform>/libanydoc_go.a` (`anydoc_go.lib` on
-Windows); a dynamic tarball contains the shared library
-(`libanydoc_go.so`/`.dylib`/`anydoc_go.dll`). Both carry the matching C header
-at `include/anydoc.h`.
-
-Extract at most one kind per `lib/<platform>` directory: when both the static
-archive and the shared library are present, the linker resolves `-lanydoc_go`
-to the shared library. To keep both, extract them into separate directories
-and choose one through `CGO_LDFLAGS`.
-
-The static archives are stripped of LLVM LTO IR (`.llvmbc`/`.llvmcmd`
-sections, the Mach-O `__LLVM` segment) while they are built. Rust ships its
-standard library with embedded bitcode, so an unstripped archive is rejected
-by Go 1.26.11 and 1.27.4 with
-`disallowed LTO section ".llvmbc" in #cgo LDFLAGS` (later patch releases
-accept the sections again, see
-[golang.org/issue/83126](https://github.com/golang/go/issues/83126)). Nothing
-to configure: if you see that error, the tarball predates the stripping —
-download the release asset again.
+A tarball contains `lib/<platform>/` — `libanydoc_go.so`, `libanydoc_go.dylib`,
+or `anydoc_go.dll` with its import library (`anydoc_go.dll.lib`, also copied to
+`libanydoc_go.dll.a` for mingw) — plus the matching C header at
+`include/anydoc.h`.
 
 Verify before use (`shasum -a 256 -c SHA256SUMS` on macOS):
 
@@ -343,13 +331,13 @@ Verify before use (`shasum -a 256 -c SHA256SUMS` on macOS):
 sha256sum -c SHA256SUMS
 ```
 
-### Static (the default)
+### Link
 
 Download, extract, and pass the platform directory through `CGO_LDFLAGS`
 (cgo appends these flags after the package's own):
 
 ```
-tar -xzf anydoc-static-linux_amd64.tar.gz -C anydoc-lib
+tar -xzf anydoc-dynlib-linux_amd64.tar.gz -C anydoc-lib
 CGO_LDFLAGS="-L$(pwd)/anydoc-lib/lib/linux_amd64" go build ./...
 ```
 
@@ -359,41 +347,33 @@ extracted into a checkout or a vendored module at `lib/<platform>/`, the
 `#cgo LDFLAGS` in the platform file finds it without `CGO_LDFLAGS`:
 
 ```
-tar -xzf anydoc-static-linux_amd64.tar.gz -C vendor/github.com/nbbug/anydoc-go
+tar -xzf anydoc-dynlib-linux_amd64.tar.gz -C vendor/github.com/nbbug/anydoc-go
 go build -mod=vendor ./...
 ```
 
-The static archive is the full C ABI, so it can also be consumed by C, C++, or
-another language binding that calls [include/anydoc.h](include/anydoc.h).
+The library is the full C ABI, so it can also be consumed by C, C++, or another
+language binding that calls [include/anydoc.h](include/anydoc.h).
 
-### Dynamic (opt-in)
+### Run
 
-Build with the `anydoc_dynamic` tag to link the shared library instead:
+The library is loaded when the program starts. When the tarball is extracted
+into the module's `lib/<platform>/`, the link line records an rpath to that
+directory, so a binary built there finds the library with no environment
+variable. For a copy shipped elsewhere, point the loader at it:
+
+- Linux: `LD_LIBRARY_PATH`, or install the library in a standard loader path;
+- macOS: `DYLD_LIBRARY_PATH` — note that dyld drops it before `go run` and
+  `go test` start, so with a custom directory either install the library in a
+  standard path or run the built binary directly;
+- Windows: place `anydoc_go.dll` next to the executable or on `PATH`.
 
 ```
-go build -tags anydoc_dynamic ./...
+LD_LIBRARY_PATH="$(pwd)/anydoc-lib/lib/linux_amd64" ./myapp
 ```
 
-Download the `anydoc-dynlib-<platform>.tar.gz` asset, extract it, and point
-cgo at the platform directory:
-
-```
-tar -xzf anydoc-dynlib-darwin_arm64.tar.gz -C anydoc-lib
-CGO_LDFLAGS="-L$(pwd)/anydoc-lib/lib/darwin_arm64" go build -tags anydoc_dynamic ./...
-```
-
-To use the default `${SRCDIR}/lib/<platform>` search path, extract the
-dynamic tarball into a checkout or vendored module, replacing (not adding to)
-any static archive in that directory.
-
-At run time the OS must be able to load the library: set `LD_LIBRARY_PATH`
-(Linux) or `DYLD_LIBRARY_PATH` (macOS) to the platform directory, and on
-Windows place the DLL next to the executable or on `PATH`.
-
-Trade-offs: dynamic builds keep the binary small and let several binaries
-share one library, but the deployment must carry the library alongside, and
-the binary is only as good as the library you downloaded. Prefer the static
-default unless the shared-library deployment model fits better.
+Trade-offs: the binary stays small and several binaries can share one library,
+but every deployment has to carry it alongside, and the program only works as
+well as the library you shipped.
 
 ## Building the libraries from source
 
@@ -414,64 +394,37 @@ plus one cross toolchain: `cross` (with Docker) or `cargo-zigbuild`
 # One target directly, choosing the driver:
 TARGET=aarch64-unknown-linux-gnu BUILD_TOOL=cross ./scripts/build-anydoc-lib.sh
 TARGET=x86_64-pc-windows-msvc ./scripts/build-anydoc-lib.sh   # on a Windows host only
-
-# Both the static archive and the shared library:
-LIBS=both TARGET=aarch64-unknown-linux-gnu BUILD_TOOL=cross ./scripts/build-anydoc-lib.sh
 ```
 
 [scripts/build-all.sh](scripts/build-all.sh) prefers `cross`, falls back to
-`cargo-zigbuild`, then plain cargo. macOS archives build natively on a Mac
+`cargo-zigbuild`, then plain cargo. macOS libraries build natively on a Mac
 (Apple's SDK cannot be redistributed, so Linux hosts cannot build them — CI
-uses macOS runners); the Windows archive builds natively on Windows with the
+uses macOS runners); the Windows library builds natively on Windows with the
 MSVC toolchain (CI uses a Windows runner) and is skipped elsewhere. The
 scripts pin the exact `anydoc` version, refuse to build when
 [version.go](version.go) disagrees with the Cargo.toml pin, and build with
 `--locked` once [Cargo.lock](Cargo.lock) exists.
 
-Every static archive is then post-processed by
-[scripts/strip-llvm-lto.sh](scripts/strip-llvm-lto.sh), which removes the LLVM
-LTO IR that Go 1.26.11 and 1.27.4 reject (see
-[Prebuilt libraries](#prebuilt-libraries-download)) — the Rust toolchain embeds
-it in every staticlib, so it cannot be switched off from `Cargo.toml`. That
-makes a source build depend on the stripper's tools as well:
+Each build is written to `lib/<platform>/` and checked against the C header
+before it counts as done: every declared `anydoc_*` function must be exported.
+On Linux and macOS that check reads the dynamic symbol table with `nm`; on
+Windows the DLL and its import library are only checked for existence and size
+(the runner has no `nm` that reads both architectures), and the exports come
+from rustc's `#[no_mangle]` attributes by construction.
 
-- Every format is rewritten member by member with LLVM's `objcopy`, which
-  removes a section by name and drops the enclosing segment once its last
-  section is gone; `objdump` names the ELF/COFF sections and `ar` unpacks and
-  repacks the archive. Take all three from the Rust `llvm-tools` component
-  (`rustup component add llvm-tools`): unlike a host binutils they read every
-  Rust target and format, so an x86_64 Linux host can strip an arm64 archive.
-  `TOOL_PREFIX=aarch64-linux-gnu-` selects a cross binutils instead.
-- Mach-O archives additionally use Apple's `otool` to name the `__LLVM`
-  sections; it comes with the Xcode command line tools. The Apple linker is not
-  used: `ld -r` drops the `__LLVM` segment only when it is a segment of its
-  own, while rustc places it inside the object's segment and current Xcode
-  linkers keep it there.
-- MSVC archives (the Windows ones) are unpacked by index with `python3` instead
-  of `ar`: rustc bundles import objects for the raw-dylib system DLLs, so one
-  static library holds several members with the same name (`advapi32.dll`,
-  `bcryptprimitives.dll`, …) and `ar x` would silently keep only the last one,
-  dropping symbols the linker needs. The import objects themselves are carried
-  through untouched — they have no sections, and `objcopy` cannot parse them —
-  while the repack rebuilds the archive index, import symbols included.
-- Windows archives are built with LTO off (the build script sets
-  `CARGO_PROFILE_RELEASE_LTO=false` for MSVC targets). Fat LTO merges the whole
-  graph into one COFF object, this graph passes COFF's 65279-section limit, and
-  rustc then emits a `bigobj` member that Go's cgo linker-input check cannot
-  parse at all — stripping sections cannot make such an archive linkable.
-  Without LTO every object stays small (the largest is ~11k sections here).
-
-`scripts/strip-llvm-lto.sh --check <archive>` verifies an archive without
-changing it; the build script and the **Build libraries** workflow both fail
-rather than ship an archive that still carries the IR.
+The shared library needs no post-processing: the linkers drop the LTO IR that
+Rust's precompiled std embeds (the `.llvmbc`/`.llvmcmd` sections are marked
+discardable — `SHF_EXCLUDE` on ELF, `IMAGE_SCN_LNK_REMOVE` on COFF — and ld64
+drops the Mach-O `__LLVM` segment), so the shipped `.so`/`.dylib`/`.dll` is
+free of it.
 
 ### Rebuilding in CI
 
 The **Build libraries** workflow
 ([.github/workflows/build-libs.yml](.github/workflows/build-libs.yml)) builds
-both the static archive and the shared library for all six platforms in one
-run, smoke-tests the linux/amd64 packages through the Go test suite, and
-publishes the 12 tarballs plus `SHA256SUMS` to the `libs-v0.2.5` release (the
+the shared library for all six platforms in one run, smoke-tests the
+linux/amd64 package through the Go test suite against the packaged tarball, and
+publishes the six tarballs plus `SHA256SUMS` to the `libs-v0.2.5` release (the
 `release_tag` input; re-running updates the same release). It does not commit
 anything to the repository.
 
@@ -479,16 +432,15 @@ anything to the repository.
 
 Run it after changing the `anydoc = "=X.Y.Z"` pin, the C ABI, the platform
 matrix, or the build tooling. The **CI** workflow runs gofmt, the version-pin
-agreement check, stub-mode tests, and the dynamic-tag vet on every push and
-pull request; it also builds the linux/amd64 static archive from source, links
-it with Go 1.27.4 (the release whose cgo check rejects LLVM LTO IR, so a
-stripping regression fails CI rather than a user's `go build`), and runs the
-full cgo test suite against it.
+agreement check, and stub-mode tests on every push and pull request; it also
+builds the linux/amd64 shared library from source, links it with Go 1.27.4 (the
+release whose cgo check rejects LLVM LTO IR, so a regression fails CI rather
+than a user's `go build`), and runs the full cgo test suite against it.
 
 ## Wasm vs. this binding
 
 anydoc also ships official [WebAssembly bindings](https://github.com/firecrawl/anydoc/tree/main/wasm)
-(`@firecrawl/anydoc-wasm`). This static-library binding exists because a
+(`@firecrawl/anydoc-wasm`). This native binding exists because a
 Go-native server gains nothing from the wasm runtime.
 
 **Advantages over wasm**
@@ -503,25 +455,23 @@ Go-native server gains nothing from the wasm runtime.
 - **Concurrency.** Native threads and Go's scheduler; wasm modules run
   single-threaded on the calling thread, so busy servers must shuttle
   conversions to workers.
-- **One less dependency.** The archive is linked into the binary; no runtime
-  library to keep in lockstep with the Go module.
 
 **Disadvantages vs. wasm**
 
 - **cgo required.** Breaks `CGO_ENABLED=0` builds and needs a C toolchain per
   platform; some PaaS/buildpack setups and static-analysis tooling dislike
   cgo.
-- **Per-platform libraries.** Six platforms × two kinds, downloaded separately;
-  wasm is a single portable artifact. The linked binary grows by the archive
-  too.
+- **A runtime library per platform.** Six platforms, downloaded separately;
+  wasm is a single portable artifact. Every deployment also has to ship the
+  shared library next to the binary.
 - **A manual download step.** `go get` alone is not enough: each build target
   needs its release tarball (or a locally built library). wasm is self-contained.
 - **Cross-compiling is more work.** One host cannot produce every library
   without `cross`/zig (macOS targets need a Mac); wasm builds anywhere from
   anywhere.
 - **No browser or edge use.** wasm runs in the browser and on serverless
-  edge platforms; a native archive cannot.
-- **Libc coupling.** The linux archive targets glibc; wasm is libc-agnostic.
+  edge platforms; a native library cannot.
+- **Libc coupling.** The Linux library targets glibc; wasm is libc-agnostic.
 
 **Rule of thumb:** in a Go service that converts documents server-side, use
 this module. For browser/edge tooling, small CLI one-offs, or pure-Go
@@ -539,8 +489,8 @@ anydoc parses untrusted, hostile input in your process:
   pin with `--locked` rebuilds rather than ad-hoc versions.
 - anydoc 0.2.5 moves the ZIP-based formats to `zip` 9.x (9.5.1 or newer;
   the lockfile currently resolves 9.7.3), clearing five advisories that affect
-  every 8.x release (CVE-2026-115905 through CVE-2026-115909). The static
-  release archives are rebuilt from this pin.
+  every 8.x release (CVE-2026-115905 through CVE-2026-115909). The release
+  libraries are rebuilt from this pin.
 - With `OcrHosted`, PDFs that fail with `needs_ocr` leave your process and
   are uploaded to Firecrawl Parse (keyless unless `FIRECRAWL_API_KEY` is
   set). Review its terms before enabling it on sensitive documents; the

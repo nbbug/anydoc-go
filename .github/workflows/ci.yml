@@ -34,43 +34,34 @@ jobs:
           echo "anydoc pin: $cargo_version"
 
       # Stub builds: the package must compile and fail gracefully everywhere,
-      # with cgo disabled and without any downloaded libraries.
+      # with cgo disabled and without any downloaded library.
       - name: Test without cgo (stub path)
         run: |
           CGO_ENABLED=0 go vet ./...
           CGO_ENABLED=0 go test ./...
 
-      # The `anydoc_dynamic` tag must keep compiling: vet does not link, so it
-      # needs only the committed header, not a downloaded shared library.
-      - name: Vet with the dynamic tag (no link)
-        run: |
-          go vet -tags anydoc_dynamic ./...
-          CGO_ENABLED=0 go vet -tags anydoc_dynamic ./...
-
-      # The static libraries are release assets, not repository files. Build
-      # the host archive so the full cgo suite can actually link and run.
-      # llvm-tools supplies the llvm-objcopy/llvm-objdump pair the build script
-      # uses to strip LLVM LTO IR from the archive (they read every Rust
-      # target, unlike the host binutils).
+      # The shared libraries are release assets, not repository files. Build
+      # the host one so the cgo suite can actually link and load it.
       - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: llvm-tools
       - uses: Swatinem/rust-cache@v2
         with:
           key: anydoc-go-ci
-      - name: Build linux/amd64 static library
+      - name: Build linux/amd64 shared library
         run: ./scripts/build-anydoc-lib.sh
 
       # Go 1.26.11 and 1.27.4 reject cgo linker inputs that carry LLVM LTO IR;
       # later patch releases accept the sections again (golang.org/issue/83126).
-      # Linking with 1.27.4 keeps the archive honest for the users still on the
-      # strict releases: a build that stops stripping them fails here, at the
-      # source, instead of in their `go build`.
+      # The go command also inspects shared libraries in -L directories, so
+      # linking with 1.27.4 keeps the shipped .so honest for the users still on
+      # the strict releases.
       - name: Link with Go 1.27.4 (the cgo release that rejects LTO IR)
-        run: GOTOOLCHAIN=go1.27.4 go build ./examples/convert ./examples/parse
-
-      - name: Test with cgo (linux/amd64 static library)
         run: |
+          export LD_LIBRARY_PATH="$PWD/lib/linux_amd64"
+          GOTOOLCHAIN=go1.27.4 go build ./examples/convert ./examples/parse
+
+      - name: Test with cgo (linux/amd64 shared library)
+        run: |
+          export LD_LIBRARY_PATH="$PWD/lib/linux_amd64"
           go vet ./...
           go test ./...
           go build ./examples/convert ./examples/parse

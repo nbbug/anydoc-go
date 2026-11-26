@@ -6,10 +6,10 @@
 Rust 库，可将 Word、PowerPoint、Excel、OpenDocument、RTF、EPUB、CSV 和 PDF
 等文档转换为 GitHub Flavored Markdown。
 
-anydoc-go 默认通过 cgo 以**静态库**的方式链接 anydoc；使用
-`anydoc_dynamic` 构建标签时改为链接共享库。库文件不再打包进 Go 模块：
+anydoc-go 通过 cgo 以**共享库**的方式链接 anydoc。库文件不打包进 Go 模块：
 **Build libraries** 工作流会为每个平台发布对应的压缩包，下载后让 cgo
-指向它即可。使用者**无需安装 Rust 或任何额外工具链**。
+指向它即可；库在运行时加载，因此需要随程序一起分发。使用者**无需安装
+Rust 或任何额外工具链**。
 
 ## 环境要求
 
@@ -27,15 +27,18 @@ go get github.com/nbbug/anydoc-go
 ```
 
 `go get` 只会拉取 Go 包。请从
-[libs-v0.2.5 release](#预编译库下载) 下载当前平台的静态库压缩包，解压后
-通过 `CGO_LDFLAGS` 指向它的 `lib/<platform>` 目录：
+[libs-v0.2.5 release](#预编译库下载) 下载当前平台的动态库压缩包，解压后
+通过 `CGO_LDFLAGS` 指向它的 `lib/<platform>` 目录，并在运行时把该目录
+加入动态库搜索路径：
 
 ```
-tar -xzf anydoc-static-linux_amd64.tar.gz -C anydoc-lib
+tar -xzf anydoc-dynlib-linux_amd64.tar.gz -C anydoc-lib
 CGO_LDFLAGS="-L$(pwd)/anydoc-lib/lib/linux_amd64" go build ./...
+LD_LIBRARY_PATH="$(pwd)/anydoc-lib/lib/linux_amd64" ./myapp
 ```
 
-Windows 在 PowerShell 中用 `$env:CGO_LDFLAGS = "-L..."` 设置同样的值。
+Windows 在 PowerShell 中用 `$env:CGO_LDFLAGS = "-L..."` 设置同样的值，
+并把 `anydoc_go.dll` 放在可执行文件旁。
 
 ## 快速上手
 
@@ -78,9 +81,9 @@ go run ./examples/parse   -file report.docx
 ## 支持的平台
 
 Go 编译器通过构建标签（build tags）为以下每个组合自动选择平台文件。请从
-release 下载对应的静态库或共享库；每个库都是 `lib/<platform>/` 目录下的
-一个文件：除 Windows 外静态库为 `libanydoc_go.a`，Windows 为 MSVC 的 COFF
-归档 `anydoc_go.lib`。
+release 下载对应的共享库；它位于 `lib/<platform>/` 下：
+`libanydoc_go.so`、`libanydoc_go.dylib`，Windows 则是 `anydoc_go.dll`
+及其 import 库。
 
 | 平台          | Rust 目标                   | 链接所用的 C 工具链       |
 | ------------- | --------------------------- | ------------------------- |
@@ -94,12 +97,13 @@ release 下载对应的静态库或共享库；每个库都是 `lib/<platform>/`
 说明：
 
 - **Windows 使用 MSVC 目标**（`x86_64-pc-windows-msvc` 与
-  `aarch64-pc-windows-msvc`），与 WeKnora 绑定一致。静态库由 MSVC 工具链
+  `aarch64-pc-windows-msvc`），与 WeKnora 绑定一致。DLL 由 MSVC 工具链
   构建（MSVC 不可再分发，因此只能在原生 Windows 主机或 CI 的 Windows
-  运行器上构建），产物为 `anydoc_go.lib`。Go 的 cgo 仍然使用 mingw gcc
-  链接 —— GNU ld 可以读取 MSVC 的 `.lib` 归档 —— 因此使用者只需要标准的
-  mingw-w64 工具链，不需要安装 Visual Studio。
-- **Linux 为 glibc。**Alpine/musl 用户需要自行重新编译静态库（在 Alpine
+  运行器上构建），并附带其 import 库。Go 的 cgo 仍然使用 mingw gcc
+  链接 —— GNU ld 可以读取 MSVC 的 import 库 —— 因此使用者只需要标准的
+  mingw-w64 工具链，不需要安装 Visual Studio。运行时 `anydoc_go.dll`
+  需放在可执行文件旁或 `PATH` 中。
+- **Linux 为 glibc。**Alpine/musl 用户需要自行重新编译共享库（在 Alpine
   镜像内执行 `./scripts/build-all.sh linux_amd64`，或使用
   `cargo-zigbuild`，再使用或发布该产物）。Go 的构建标签无法自动识别 musl，参考项目
   WeKnora 的绑定为此提供了平行的 `-tags musl` 变体；本模块保持最小平台矩阵，
@@ -230,29 +234,25 @@ md, err := anydoc.ToMarkdownBytesWithOptions(pdf, &anydoc.FormatPdf, &anydoc.Opt
    `anydoc_to_markdown*`、`anydoc_to_document`、格式检测，以及配套的
    `_free` 释放函数。构建脚本将 anydoc 内部私有的 `document_to_markdown`
    序列化器重新导出，从而保留官方 GFM 渲染能力。
-2. **每个平台一个静态库和一个共享库** —— `crate-type = ["staticlib",
-   "cdylib"]` 同时构建 `libanydoc_go.a` 和平台对应的共享库。
-   **Build libraries** 工作流会为每个平台发布这两种产物；它们都不会提交
-   到模块中。
-3. **带构建标签的平台文件** —— 每个平台每种类型一个 Go 文件（
-   [lib_linux_amd64.go](lib_linux_amd64.go)、
-   [lib_linux_amd64_dynamic.go](lib_linux_amd64_dynamic.go) 等），由
-   `//go:build linux && amd64 && cgo`（动态版本额外带 `anydoc_dynamic`）
-   选中，并在其中通过 `#cgo LDFLAGS` 指定搜索路径：
-   静态库和动态库都为 `-L${SRCDIR}/lib/linux_amd64 -lanydoc_go …`。
+2. **每个平台一个共享库** —— `crate-type = ["cdylib"]` 构建平台对应的共享库
+   （`.so`、`.dylib`，Windows 为 `.dll` 及其 import 库）。**Build libraries**
+   工作流会为每个平台发布该产物；它不会提交到模块中。
+3. **带构建标签的平台文件** —— 每个平台一个 Go 文件（
+   [lib_linux_amd64.go](lib_linux_amd64.go) 等），由
+   `//go:build linux && amd64 && cgo` 选中，并在其中通过 `#cgo LDFLAGS`
+   指定搜索路径：`-L${SRCDIR}/lib/linux_amd64 -lanydoc_go`。
    把下载的压缩包解压到对应目录即可被自动找到，否则通过 `CGO_LDFLAGS`
-   提供路径。
+   提供路径；运行时还需要让加载器找到它。
 4. **对用户友好的 Go API** —— [anydoc.go](anydoc.go) 把所有指针和释放调用
    隐藏在普通 Go 函数之后；ABI 调用期间锁定 goroutine（错误槽是线程局部的），
    并把文档缓冲区边界安全地解码为 Go 结构体。
 
 ## 构建标签与兜底实现
 
-| 构建方式                                       | 参与编译的文件                        | 行为                                              |
-| ---------------------------------------------- | ------------------------------------- | ------------------------------------------------- |
-| cgo + 受支持平台                               | 静态平台文件 + [anydoc.go](anydoc.go) | 链接下载的静态库，功能完整                        |
-| cgo + 受支持平台 + `-tags anydoc_dynamic`      | 动态平台文件 + [anydoc.go](anydoc.go) | 链接下载的共享库                                  |
-| `CGO_ENABLED=0` 或不受支持的平台               | [anydoc_stub.go](anydoc_stub.go)      | 可编译；所有函数返回提示明确的 `UnavailableError` |
+| 构建方式                         | 参与编译的文件                        | 行为                                              |
+| -------------------------------- | ------------------------------------- | ------------------------------------------------- |
+| cgo + 受支持平台                 | 平台文件 + [anydoc.go](anydoc.go)     | 链接下载的共享库，功能完整                        |
+| `CGO_ENABLED=0` 或不受支持的平台 | [anydoc_stub.go](anydoc_stub.go)      | 可编译；所有函数返回提示明确的 `UnavailableError` |
 
 ```go
 md, err := anydoc.ToMarkdownBytes(data, nil)
@@ -263,7 +263,8 @@ if err != nil && anydoc.IsUnavailable(err) {
 ```
 
 兜底实现保证模块在 cgo 不可用时仍可导入。在受支持平台且开启 cgo 时，缺少
-下载的库会在链接阶段报 cgo 的常规错误；按上文下载即可提供该库。
+下载的库会在链接阶段报 cgo 的常规错误；按上文下载即可提供该库。没有用于
+切换实现的构建标签：cgo + 受支持平台总是链接共享库。
 
 ## vendoring
 
@@ -275,45 +276,34 @@ if err != nil && anydoc.IsUnavailable(err) {
 
 ```
 go mod vendor
-tar -xzf anydoc-static-linux_amd64.tar.gz -C vendor/github.com/nbbug/anydoc-go
+tar -xzf anydoc-dynlib-linux_amd64.tar.gz -C vendor/github.com/nbbug/anydoc-go
 go build -mod=vendor ./...
 ```
 
-本地 checkout 或使用 `replace` 时，把压缩包解压到模块根目录即可。动态构建
-也可以改用 `CGO_LDFLAGS`，见[预编译库](#预编译库下载)。
+本地 checkout 或使用 `replace` 时，把压缩包解压到模块根目录即可。库放在
+其他位置时可用 `CGO_LDFLAGS` 指定目录，运行时还要把它加入加载器搜索路径，
+见[预编译库](#预编译库下载)。
 
 ## 预编译库下载
 
 [libs-v0.2.5 release](https://github.com/nbbug/anydoc-go/releases/tag/libs-v0.2.5)
-为每个支持的平台提供静态库和共享库，并附带
+为每个支持的平台提供共享库，并附带
 [`SHA256SUMS`](https://github.com/nbbug/anydoc-go/releases/download/libs-v0.2.5/SHA256SUMS)。
-这些库都不在 Go 模块中，因此只需要下载自己所用平台和类型。
+这些库都不在 Go 模块中，因此只需要下载自己所用平台的压缩包。
 
-| 平台          | 静态库（默认构建）                                                                                                                         | 动态库（`anydoc_dynamic`）                                                                                                                    |
-| ------------- | ------------------------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------- |
-| linux/amd64   | [anydoc-static-linux_amd64.tar.gz](https://github.com/nbbug/anydoc-go/releases/download/libs-v0.2.5/anydoc-static-linux_amd64.tar.gz)       | [anydoc-dynlib-linux_amd64.tar.gz](https://github.com/nbbug/anydoc-go/releases/download/libs-v0.2.5/anydoc-dynlib-linux_amd64.tar.gz)         |
-| linux/arm64   | [anydoc-static-linux_arm64.tar.gz](https://github.com/nbbug/anydoc-go/releases/download/libs-v0.2.5/anydoc-static-linux_arm64.tar.gz)       | [anydoc-dynlib-linux_arm64.tar.gz](https://github.com/nbbug/anydoc-go/releases/download/libs-v0.2.5/anydoc-dynlib-linux_arm64.tar.gz)         |
-| darwin/amd64  | [anydoc-static-darwin_amd64.tar.gz](https://github.com/nbbug/anydoc-go/releases/download/libs-v0.2.5/anydoc-static-darwin_amd64.tar.gz)     | [anydoc-dynlib-darwin_amd64.tar.gz](https://github.com/nbbug/anydoc-go/releases/download/libs-v0.2.5/anydoc-dynlib-darwin_amd64.tar.gz)       |
-| darwin/arm64  | [anydoc-static-darwin_arm64.tar.gz](https://github.com/nbbug/anydoc-go/releases/download/libs-v0.2.5/anydoc-static-darwin_arm64.tar.gz)     | [anydoc-dynlib-darwin_arm64.tar.gz](https://github.com/nbbug/anydoc-go/releases/download/libs-v0.2.5/anydoc-dynlib-darwin_arm64.tar.gz)       |
-| windows/amd64 | [anydoc-static-windows_amd64.tar.gz](https://github.com/nbbug/anydoc-go/releases/download/libs-v0.2.5/anydoc-static-windows_amd64.tar.gz)   | [anydoc-dynlib-windows_amd64.tar.gz](https://github.com/nbbug/anydoc-go/releases/download/libs-v0.2.5/anydoc-dynlib-windows_amd64.tar.gz)     |
-| windows/arm64 | [anydoc-static-windows_arm64.tar.gz](https://github.com/nbbug/anydoc-go/releases/download/libs-v0.2.5/anydoc-static-windows_arm64.tar.gz)   | [anydoc-dynlib-windows_arm64.tar.gz](https://github.com/nbbug/anydoc-go/releases/download/libs-v0.2.5/anydoc-dynlib-windows_arm64.tar.gz)     |
+| 平台          | 资源                                                                                                                                           |
+| ------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
+| linux/amd64   | [anydoc-dynlib-linux_amd64.tar.gz](https://github.com/nbbug/anydoc-go/releases/download/libs-v0.2.5/anydoc-dynlib-linux_amd64.tar.gz)           |
+| linux/arm64   | [anydoc-dynlib-linux_arm64.tar.gz](https://github.com/nbbug/anydoc-go/releases/download/libs-v0.2.5/anydoc-dynlib-linux_arm64.tar.gz)           |
+| darwin/amd64  | [anydoc-dynlib-darwin_amd64.tar.gz](https://github.com/nbbug/anydoc-go/releases/download/libs-v0.2.5/anydoc-dynlib-darwin_amd64.tar.gz)         |
+| darwin/arm64  | [anydoc-dynlib-darwin_arm64.tar.gz](https://github.com/nbbug/anydoc-go/releases/download/libs-v0.2.5/anydoc-dynlib-darwin_arm64.tar.gz)         |
+| windows/amd64 | [anydoc-dynlib-windows_amd64.tar.gz](https://github.com/nbbug/anydoc-go/releases/download/libs-v0.2.5/anydoc-dynlib-windows_amd64.tar.gz)       |
+| windows/arm64 | [anydoc-dynlib-windows_arm64.tar.gz](https://github.com/nbbug/anydoc-go/releases/download/libs-v0.2.5/anydoc-dynlib-windows_arm64.tar.gz)       |
 
-静态库压缩包包含 `lib/<platform>/libanydoc_go.a`（Windows 为
-`anydoc_go.lib`）；动态库压缩包包含对应的共享库
-（`libanydoc_go.so`/`.dylib`/`anydoc_go.dll`）。两者都附带 C 头文件
+压缩包包含 `lib/<platform>/` —— `libanydoc_go.so`、`libanydoc_go.dylib`，
+或 Windows 的 `anydoc_go.dll` 及其 import 库（`anydoc_go.dll.lib`，另外
+复制一份 `libanydoc_go.dll.a` 供 mingw 使用）—— 以及匹配的 C 头文件
 `include/anydoc.h`。
-
-同一个 `lib/<platform>` 目录中请只解压一种库：静态库和共享库同时存在时，
-链接器会优先选择共享库。如果需要同时保留两种，请分别解压到不同目录，
-并通过 `CGO_LDFLAGS` 指定其中一种。
-
-静态库在构建时已剔除 LLVM LTO IR（`.llvmbc`/`.llvmcmd` 段，以及 Mach-O 的
-`__LLVM` 段）。Rust 的标准库自带嵌入的 bitcode，因此未剔除的静态库会被
-Go 1.26.11 和 1.27.4 拒绝，报错
-`disallowed LTO section ".llvmbc" in #cgo LDFLAGS`（后续补丁版本重新允许这些段，见
-[golang.org/issue/83126](https://github.com/golang/go/issues/83126)）。使用时
-无需任何额外配置：如果遇到该报错，说明下载的压缩包早于该处理，重新下载
-release 资源即可。
 
 使用前请校验（macOS 使用 `shasum -a 256 -c SHA256SUMS`）：
 
@@ -321,13 +311,13 @@ release 资源即可。
 sha256sum -c SHA256SUMS
 ```
 
-### 静态库（默认）
+### 链接
 
 下载、解压，并通过 `CGO_LDFLAGS` 指定平台目录（cgo 会把这些 flags 追加到
 包自身 flags 之后）：
 
 ```
-tar -xzf anydoc-static-linux_amd64.tar.gz -C anydoc-lib
+tar -xzf anydoc-dynlib-linux_amd64.tar.gz -C anydoc-lib
 CGO_LDFLAGS="-L$(pwd)/anydoc-lib/lib/linux_amd64" go build ./...
 ```
 
@@ -337,37 +327,31 @@ Windows 在 PowerShell 中设置同样的 `-L.../windows_amd64`：
 `CGO_LDFLAGS`：
 
 ```
-tar -xzf anydoc-static-linux_amd64.tar.gz -C vendor/github.com/nbbug/anydoc-go
+tar -xzf anydoc-dynlib-linux_amd64.tar.gz -C vendor/github.com/nbbug/anydoc-go
 go build -mod=vendor ./...
 ```
 
-静态库包含完整的 C ABI，因此也可以供 C、C++ 或其他语言绑定直接通过
+共享库包含完整的 C ABI，因此也可以供 C、C++ 或其他语言绑定直接通过
 [include/anydoc.h](include/anydoc.h) 调用。
 
-### 动态库（可选）
+### 运行
 
-使用 `anydoc_dynamic` 构建标签改为链接共享库：
+程序启动时加载该库。把压缩包解压到模块的 `lib/<platform>/` 时，链接行会
+记录指向该目录的 rpath，因此在那里构建出的二进制无需任何环境变量就能找到
+库。若要把库随程序发布到别处，则需要让加载器能找到它：
+
+- Linux：`LD_LIBRARY_PATH`，或把库安装到标准的加载器路径；
+- macOS：`DYLD_LIBRARY_PATH` —— 注意 dyld 会在 `go run`、`go test` 启动
+  之前就丢掉它，因此自定义目录时要么把库装到标准路径，要么直接运行构建
+  出来的二进制；
+- Windows：把 `anydoc_go.dll` 放在可执行文件旁或加入 `PATH`。
 
 ```
-go build -tags anydoc_dynamic ./...
+LD_LIBRARY_PATH="$(pwd)/anydoc-lib/lib/linux_amd64" ./myapp
 ```
 
-下载 `anydoc-dynlib-<platform>.tar.gz`，解压后让 cgo 指向平台目录：
-
-```
-tar -xzf anydoc-dynlib-darwin_arm64.tar.gz -C anydoc-lib
-CGO_LDFLAGS="-L$(pwd)/anydoc-lib/lib/darwin_arm64" go build -tags anydoc_dynamic ./...
-```
-
-如果要使用默认的 `${SRCDIR}/lib/<platform>` 搜索路径，请把动态库压缩包
-解压到 checkout 或 vendored 模块，并替换该目录中已有的静态库。
-
-运行时操作系统要能找到库：Linux 设置 `LD_LIBRARY_PATH`、macOS 设置
-`DYLD_LIBRARY_PATH`，Windows 把 DLL 放在可执行文件旁或加入 `PATH`。
-
-取舍：动态构建让二进制更小、多个二进制可共享一份库，但部署时必须携带
-库文件，且二进制的质量取决于你下载的库。除非动态部署模型更合适，否则
-保持默认的静态链接。
+取舍：二进制体积更小，多个二进制可以共享一份库，但每次部署都必须携带
+库文件，而且程序的表现取决于你随附的库。
 
 ## 从源码构建库
 
@@ -387,9 +371,6 @@ CGO_LDFLAGS="-L$(pwd)/anydoc-lib/lib/darwin_arm64" go build -tags anydoc_dynamic
 # 直接构建单个目标并指定驱动：
 TARGET=aarch64-unknown-linux-gnu BUILD_TOOL=cross ./scripts/build-anydoc-lib.sh
 TARGET=x86_64-pc-windows-msvc ./scripts/build-anydoc-lib.sh   # 仅限 Windows 主机
-
-# 同时构建静态库和共享库：
-LIBS=both TARGET=aarch64-unknown-linux-gnu BUILD_TOOL=cross ./scripts/build-anydoc-lib.sh
 ```
 
 [scripts/build-all.sh](scripts/build-all.sh) 优先使用 `cross`，其次回退到
@@ -400,44 +381,22 @@ Windows 库用 MSVC 工具链在原生 Windows 上构建（CI 使用 Windows
 [version.go](version.go) 与 Cargo.toml 的锁定版本不一致时拒绝构建；
 [Cargo.lock](Cargo.lock) 存在时使用 `--locked` 构建。
 
-每个静态库随后都会经过
-[scripts/strip-llvm-lto.sh](scripts/strip-llvm-lto.sh) 处理，剔除 Go
-1.26.11 与 1.27.4 会拒绝的 LLVM LTO IR（见[预编译库](#预编译库下载)）——
-Rust 工具链会把这段 IR 嵌进所有 staticlib，无法通过 `Cargo.toml` 关闭。因此
-从源码构建也需要该脚本所用的工具：
+构建产物写入 `lib/<platform>/`，并在完成前与 C 头文件核对：头文件声明的
+每个 `anydoc_*` 函数都必须被导出。Linux 和 macOS 用 `nm` 读取动态符号表
+完成校验；Windows 上只检查 DLL 与 import 库是否存在且非空（运行器上没有
+能同时读取两种架构的 `nm`），导出符号由 rustc 的 `#[no_mangle]` 属性保证。
 
-- 三种格式都会用 LLVM 的 `objcopy` 逐成员改写：按名字删除 section，并在该
-  segment 的最后一个 section 被删掉后丢掉整个 segment；`objdump` 用来列出
-  ELF/COFF 的 section，`ar` 用来解包和重新打包归档。建议三者都从 Rust 的
-  `llvm-tools` 组件获取（`rustup component add llvm-tools`）：与主机自带的
-  binutils 不同，它们能读取任意 Rust 目标和格式，因此 x86_64 Linux 主机可以
-  处理 arm64 的库。也可以用 `TOOL_PREFIX=aarch64-linux-gnu-` 指定交叉
-  binutils。
-- Mach-O 库另外需要 Apple 的 `otool` 来定位 `__LLVM` 段（Xcode 命令行工具
-  自带）。这里不再使用 Apple 链接器：只有当 `__LLVM` 是独立 segment 时
-  `ld -r` 才会丢掉它，而 rustc 把它放在 object 自身的 segment 里，新版 Xcode
-  的链接器会原样保留。
-- MSVC 库（Windows）改用 `python3` 按索引逐个解包，而不是 `ar x`：rustc 会
-  为 raw-dylib 系统 DLL 打包 import object，导致同一个静态库里出现多个同名
-  成员（`advapi32.dll`、`bcryptprimitives.dll` 等），`ar x` 会静默地只保留
-  最后一个，从而丢掉链接器需要的符号。import object 本身原样保留（它没有
-  section，`objcopy` 也无法解析），重新打包时会重建索引，包含 import 符号。
-- Windows 库在构建时关闭 LTO（脚本对 MSVC 目标设置
-  `CARGO_PROFILE_RELEASE_LTO=false`）。fat LTO 会把整个依赖图合并成单个
-  COFF object，而这个图超过了 COFF 的 65279 个 section 上限，rustc 于是输出
-  bigobj 成员；Go 的 cgo 链接输入检查完全无法解析 bigobj，单纯剔除 section
-  并不能让这种归档可链接。关掉 LTO 后每个 object 都很小（这里最大约 1.1 万
-  个 section）。
-
-`scripts/strip-llvm-lto.sh --check <archive>` 只校验、不修改；构建脚本和
-**Build libraries** 工作流都会在仍含该 IR 时报错，而不是照常发布。
+共享库无需任何后处理：链接器会丢弃 Rust 预编译 std 中嵌入的 LTO IR
+（`.llvmbc`/`.llvmcmd` 段被标记为可丢弃 —— ELF 是 `SHF_EXCLUDE`，COFF 是
+`IMAGE_SCN_LNK_REMOVE`，ld64 则丢弃 Mach-O 的 `__LLVM` 段），因此发布的
+`.so`/`.dylib`/`.dll` 里不含这些内容。
 
 ### 在 CI 中重新构建
 
 **Build libraries** 工作流
 （[.github/workflows/build-libs.yml](.github/workflows/build-libs.yml)）
-会在一次运行中为全部六个平台构建静态库和共享库，用 Go 测试套件对
-linux/amd64 产物做冒烟测试，最后把 12 个压缩包和 `SHA256SUMS` 发布到
+会在一次运行中为全部六个平台构建共享库，用打包后的 linux/amd64 压缩包
+跑一遍 Go 测试套件做冒烟测试，最后把 6 个压缩包和 `SHA256SUMS` 发布到
 `libs-v0.2.5` release（由 `release_tag` 输入指定；重复运行会更新同一个
 release）。它不会向仓库提交任何内容。
 
@@ -445,15 +404,14 @@ release）。它不会向仓库提交任何内容。
 
 在修改 `anydoc = "=X.Y.Z"` 锁定版本、C ABI、平台矩阵或构建工具时运行它。
 **CI** 工作流在每次 push 和 pull request 时执行 gofmt 检查、版本锁定一致性
-检查、无 cgo 模式测试和动态标签 vet；它还会从源码构建 linux/amd64 静态库，
-用 Go 1.27.4（cgo 检查会拒绝 LLVM LTO IR 的版本）链接一次 —— 这样剔除步骤
-一旦回退，失败会出现在 CI 而不是使用者的 `go build` —— 然后运行完整的 cgo
-测试套件。
+检查和无 cgo 模式测试；它还会从源码构建 linux/amd64 共享库，用 Go 1.27.4
+（cgo 检查会拒绝 LLVM LTO IR 的版本）链接一次 —— 一旦回归，失败会出现在
+CI 而不是使用者的 `go build` —— 然后运行完整的 cgo 测试套件。
 
 ## Wasm 与本绑定的对比
 
 anydoc 官方也提供 [WebAssembly 绑定](https://github.com/firecrawl/anydoc/tree/main/wasm)
-（`@firecrawl/anydoc-wasm`）。本静态库绑定存在的原因在于：Go 原生服务从
+（`@firecrawl/anydoc-wasm`）。本原生绑定存在的原因在于：Go 原生服务从
 wasm 运行时中得不到任何好处。
 
 **相对 wasm 的优势**
@@ -467,23 +425,21 @@ wasm 运行时中得不到任何好处。
   没有文件系统。
 - **并发。**原生线程与 Go 调度器；wasm 模块在调用线程上单线程执行，
   繁忙的服务必须把转换任务搬运到 worker。
-- **少一个依赖。**静态库直接链入二进制，无需维护与 Go 模块版本同步的
-  运行时库。
 
 **相对 wasm 的劣势**
 
 - **必须启用 cgo。**无法用于 `CGO_ENABLED=0` 的纯 Go 构建，每个平台都需要
   C 工具链；部分 PaaS/buildpack 场景和静态分析工具对 cgo 不友好。
-- **每个平台两种库。**六个平台 × 静态/动态两种类型需要分别下载；wasm 是
-  单一可移植产物。链接后的二进制也会增大相应体积。
+- **每个平台一份运行时库。**六个平台需要分别下载；wasm 是单一可移植产物。
+  每次部署还必须把共享库随二进制一起分发。
 - **需要手动下载库。**只执行 `go get` 还不够：每个构建目标都需要对应的
   release 压缩包（或自行构建的库）。wasm 则是自包含的。
 - **交叉编译更麻烦。**单台主机无法产出全部平台的库（macOS 目标必须
   在 Mac 上构建，其余依赖 cross/zig）；wasm 在任何地方都能构建出到处
   可用的产物。
 - **无法用于浏览器或边缘计算。**wasm 可在浏览器和 serverless 边缘平台
-  运行；原生静态库不行。
-- **依赖 libc。**Linux 静态库面向 glibc；wasm 与 libc 无关。
+  运行；原生共享库不行。
+- **依赖 libc。**Linux 库面向 glibc；wasm 与 libc 无关。
 
 **选择建议：**在服务端转换文档的 Go 服务中使用本模块；浏览器/边缘工具、
 小型 CLI 一次性任务、或纯 Go 部署流水线，更适合 wasm 绑定。
@@ -500,7 +456,7 @@ anydoc 在你的进程内解析不受信任的恶意输入：
   避免随意引入未经审计的版本。
 - anydoc 0.2.5 将 ZIP 系列格式升级到 `zip` 9.x（至少 9.5.1；当前
   lockfile 锁定 9.7.3），修复了影响所有 8.x 版本的五个安全公告
-  （CVE-2026-115905 至 CVE-2026-115909）。静态库 release 产物也基于该
+  （CVE-2026-115905 至 CVE-2026-115909）。release 库产物也基于该
   锁定版本重新构建。
 - 开启 `OcrHosted` 后，报 `needs_ocr` 的 PDF 会离开你的进程并上传到
   Firecrawl Parse（除非设置 `FIRECRAWL_API_KEY`，否则免密钥）。处理敏感

@@ -1,10 +1,10 @@
 name: Build libraries
 
-# Builds the static archive and the shared library for every supported
-# platform in one run, packages one tarball per platform and kind, and
-# publishes them all to a single GitHub release. Nothing is committed to the
-# repository: users download the tarball for their platform and point cgo at
-# it (see the README, "Prebuilt libraries").
+# Builds the shared library for every supported platform, packages one tarball
+# per platform, and publishes them all to a single GitHub release. Nothing is
+# committed to the repository: users download the tarball for their platform
+# and point cgo at it (see the README, "Prebuilt libraries"). The library is
+# loaded at run time, so it has to ship next to the program.
 #
 # Trigger it manually (Actions → "Build libraries" → Run workflow) after
 # changing the `anydoc = "=X.Y.Z"` pin, the C ABI, or the platform matrix.
@@ -33,15 +33,13 @@ jobs:
           - target: x86_64-unknown-linux-gnu
             tool: cargo
             dir: linux_amd64
-            static: libanydoc_go.a
-            shared: libanydoc_go.so
           - target: aarch64-unknown-linux-gnu
             tool: cross
             dir: linux_arm64
-            static: libanydoc_go.a
-            shared: libanydoc_go.so
     steps:
       - uses: actions/checkout@v6
+      # llvm-tools supplies llvm-nm, which reads every Rust target: the host
+      # binutils nm of the runner cannot read the arm64 library.
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: llvm-tools
@@ -52,24 +50,15 @@ jobs:
         if: matrix.tool == 'cross'
         with:
           tool: cross
-      - name: Build static and shared libraries
-        run: LIBS=both BUILD_TOOL=${{ matrix.tool }} TARGET=${{ matrix.target }} ./scripts/build-anydoc-lib.sh
-      # Go 1.26.11/1.27.4 reject archives that carry LLVM LTO IR, so the build
-      # strips it. Verify the bytes that get packaged, not the build's word for
-      # it: this is the exact file users download.
-      - name: Verify the archive carries no LLVM LTO IR
-        run: ./scripts/strip-llvm-lto.sh --check "lib/${{ matrix.dir }}/${{ matrix.static }}"
+      - name: Build shared library
+        run: BUILD_TOOL=${{ matrix.tool }} TARGET=${{ matrix.target }} ./scripts/build-anydoc-lib.sh
       - name: Package
         run: |
-          mkdir -p "pkg-static/lib/${{ matrix.dir }}" pkg-static/include
-          mkdir -p "pkg-dynamic/lib/${{ matrix.dir }}" pkg-dynamic/include
-          cp "lib/${{ matrix.dir }}/${{ matrix.static }}" "pkg-static/lib/${{ matrix.dir }}/"
-          cp "lib/${{ matrix.dir }}/${{ matrix.shared }}" "pkg-dynamic/lib/${{ matrix.dir }}/"
-          cp include/anydoc.h pkg-static/include/
-          cp include/anydoc.h pkg-dynamic/include/
+          mkdir -p "pkg/lib/${{ matrix.dir }}" pkg/include
+          cp "lib/${{ matrix.dir }}/"* "pkg/lib/${{ matrix.dir }}/"
+          cp include/anydoc.h pkg/include/
           mkdir -p dist
-          tar -czf "dist/anydoc-static-${{ matrix.dir }}.tar.gz" -C pkg-static .
-          tar -czf "dist/anydoc-dynlib-${{ matrix.dir }}.tar.gz" -C pkg-dynamic .
+          tar -czf "dist/anydoc-dynlib-${{ matrix.dir }}.tar.gz" -C pkg .
       - uses: actions/upload-artifact@v7
         with:
           name: libs-${{ matrix.target }}
@@ -78,8 +67,7 @@ jobs:
 
   # Windows libraries, built with the MSVC toolchain on a native Windows
   # runner. MSVC cannot be redistributed, so neither cross nor zig can produce
-  # these targets from Linux. The resulting COFF anydoc_go.lib is linked by
-  # the mingw gcc that Go's cgo uses.
+  # these targets from Linux.
   build-windows:
     name: Build windows (${{ matrix.target }})
     runs-on: windows-2025
@@ -89,39 +77,27 @@ jobs:
         include:
           - target: x86_64-pc-windows-msvc
             dir: windows_amd64
-            static: anydoc_go.lib
-            shared: anydoc_go.dll
           - target: aarch64-pc-windows-msvc
             dir: windows_arm64
-            static: anydoc_go.lib
-            shared: anydoc_go.dll
     steps:
       - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
-          components: llvm-tools
       - uses: Swatinem/rust-cache@v2
         with:
           key: anydoc-go-${{ matrix.target }}
-      - name: Build static and shared libraries
+      - name: Build shared library
         shell: bash
-        run: LIBS=both TARGET=${{ matrix.target }} ./scripts/build-anydoc-lib.sh
-      - name: Verify the archive carries no LLVM LTO IR
-        shell: bash
-        run: ./scripts/strip-llvm-lto.sh --check "lib/${{ matrix.dir }}/${{ matrix.static }}"
+        run: TARGET=${{ matrix.target }} ./scripts/build-anydoc-lib.sh
       - name: Package
         shell: bash
         run: |
-          mkdir -p "pkg-static/lib/${{ matrix.dir }}" pkg-static/include
-          mkdir -p "pkg-dynamic/lib/${{ matrix.dir }}" pkg-dynamic/include
-          cp "lib/${{ matrix.dir }}/${{ matrix.static }}" "pkg-static/lib/${{ matrix.dir }}/"
-          cp "lib/${{ matrix.dir }}/${{ matrix.shared }}" "pkg-dynamic/lib/${{ matrix.dir }}/"
-          cp include/anydoc.h pkg-static/include/
-          cp include/anydoc.h pkg-dynamic/include/
+          mkdir -p "pkg/lib/${{ matrix.dir }}" pkg/include
+          cp "lib/${{ matrix.dir }}/"* "pkg/lib/${{ matrix.dir }}/"
+          cp include/anydoc.h pkg/include/
           mkdir -p dist
-          tar -czf "dist/anydoc-static-${{ matrix.dir }}.tar.gz" -C pkg-static .
-          tar -czf "dist/anydoc-dynlib-${{ matrix.dir }}.tar.gz" -C pkg-dynamic .
+          tar -czf "dist/anydoc-dynlib-${{ matrix.dir }}.tar.gz" -C pkg .
       - uses: actions/upload-artifact@v7
         with:
           name: libs-${{ matrix.target }}
@@ -129,9 +105,8 @@ jobs:
           if-no-files-found: error
 
   # macOS libraries. Both architectures build on the arm64 runner: aarch64
-  # natively, x86_64 through the universal Xcode toolchain (the crate tree is
-  # pure Rust, so no C toolchain is needed). Apple's SDK cannot be
-  # redistributed, so these cannot be built from Linux with cross.
+  # natively, x86_64 through the universal Xcode toolchain. Apple's SDK cannot
+  # be redistributed, so these cannot be built from Linux with cross.
   build-darwin:
     name: Build darwin (${{ matrix.target }})
     runs-on: macos-latest
@@ -142,34 +117,26 @@ jobs:
           - target: aarch64-apple-darwin
             dir: darwin_arm64
             goarch: arm64
-            static: libanydoc_go.a
-            shared: libanydoc_go.dylib
           - target: x86_64-apple-darwin
             dir: darwin_amd64
             goarch: amd64
-            static: libanydoc_go.a
-            shared: libanydoc_go.dylib
     steps:
       - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
-          components: llvm-tools
       - uses: Swatinem/rust-cache@v2
         with:
           key: anydoc-go-${{ matrix.target }}
-      - name: Build static and shared libraries
-        run: LIBS=both TARGET=${{ matrix.target }} ./scripts/build-anydoc-lib.sh
-      - name: Verify the archive carries no LLVM LTO IR
-        run: ./scripts/strip-llvm-lto.sh --check "lib/${{ matrix.dir }}/${{ matrix.static }}"
-      # The Mach-O archive is rewritten with llvm-objcopy rather than relinked,
-      # so exercise it through the real cgo path with the release whose check
-      # rejects LTO IR: a mangled member shows up here instead of in a user's
-      # build.
+      - name: Build shared library
+        run: TARGET=${{ matrix.target }} ./scripts/build-anydoc-lib.sh
+      # Link the packaged dylib from a Go program, with the release whose cgo
+      # check is strict (golang.org/issue/83126): a library Go cannot accept,
+      # or one with unresolved symbols, fails here instead of at a user's desk.
       - uses: actions/setup-go@v6
         with:
           go-version: "1.27.x"
-      - name: Link the archive with Go 1.27.4
+      - name: Link the library with Go 1.27.4
         env:
           GOTOOLCHAIN: go1.27.4
           CGO_ENABLED: "1"
@@ -177,15 +144,11 @@ jobs:
         run: go build ./examples/convert ./examples/parse
       - name: Package
         run: |
-          mkdir -p "pkg-static/lib/${{ matrix.dir }}" pkg-static/include
-          mkdir -p "pkg-dynamic/lib/${{ matrix.dir }}" pkg-dynamic/include
-          cp "lib/${{ matrix.dir }}/${{ matrix.static }}" "pkg-static/lib/${{ matrix.dir }}/"
-          cp "lib/${{ matrix.dir }}/${{ matrix.shared }}" "pkg-dynamic/lib/${{ matrix.dir }}/"
-          cp include/anydoc.h pkg-static/include/
-          cp include/anydoc.h pkg-dynamic/include/
+          mkdir -p "pkg/lib/${{ matrix.dir }}" pkg/include
+          cp "lib/${{ matrix.dir }}/"* "pkg/lib/${{ matrix.dir }}/"
+          cp include/anydoc.h pkg/include/
           mkdir -p dist
-          tar -czf "dist/anydoc-static-${{ matrix.dir }}.tar.gz" -C pkg-static .
-          tar -czf "dist/anydoc-dynlib-${{ matrix.dir }}.tar.gz" -C pkg-dynamic .
+          tar -czf "dist/anydoc-dynlib-${{ matrix.dir }}.tar.gz" -C pkg .
       - uses: actions/upload-artifact@v7
         with:
           name: libs-${{ matrix.target }}
@@ -213,40 +176,26 @@ jobs:
         run: |
           set -euo pipefail
           shopt -s nullglob
-          static=(dist/anydoc-static-*.tar.gz)
           dynamic=(dist/anydoc-dynlib-*.tar.gz)
-          if [ ${#static[@]} -ne 6 ] || [ ${#dynamic[@]} -ne 6 ]; then
-            echo "error: expected 6 static and 6 dynamic tarballs," \
-                 "found ${#static[@]} and ${#dynamic[@]}" >&2
+          if [ ${#dynamic[@]} -ne 6 ]; then
+            echo "error: expected 6 dynamic tarballs, found ${#dynamic[@]}" >&2
             exit 1
           fi
-          for tarball in "${static[@]}"; do
-            listing=$(tar -tzf "$tarball")
-            echo "$listing" | grep -qx './include/anydoc.h'
-            echo "$listing" | grep -Eq '^\./lib/[^/]+/(libanydoc_go\.a|anydoc_go\.lib)$'
-            echo "OK: $tarball"
-          done
           for tarball in "${dynamic[@]}"; do
             listing=$(tar -tzf "$tarball")
             echo "$listing" | grep -qx './include/anydoc.h'
             echo "$listing" | grep -Eq '^\./lib/[^/]+/(libanydoc_go\.so|libanydoc_go\.dylib|anydoc_go\.dll)$'
             echo "OK: $tarball"
           done
-      # Link and run the Go suite against the actual release tarballs, so a
-      # broken package fails the workflow before it reaches users.
-      - name: Smoke test static package
+      # Link and run the Go suite against the actual release tarball, with the
+      # Go release whose cgo check rejects LTO IR, so a broken package fails
+      # the workflow before it reaches users.
+      - name: Smoke test the linux/amd64 package
         run: |
           set -euo pipefail
-          tar -xzf dist/anydoc-static-linux_amd64.tar.gz -C .
-          GOTOOLCHAIN=go1.27.4 go test -count=1 ./...
-      - name: Smoke test dynamic package
-        run: |
-          set -euo pipefail
-          mkdir -p lib/linux_amd64 /tmp/anydoc-dyn
-          tar -xzf dist/anydoc-dynlib-linux_amd64.tar.gz -C /tmp/anydoc-dyn
-          cp /tmp/anydoc-dyn/lib/linux_amd64/libanydoc_go.so lib/linux_amd64/
+          tar -xzf dist/anydoc-dynlib-linux_amd64.tar.gz -C .
           LD_LIBRARY_PATH="$PWD/lib/linux_amd64" \
-            GOTOOLCHAIN=go1.27.4 go test -count=1 -tags anydoc_dynamic ./...
+            GOTOOLCHAIN=go1.27.4 go test -count=1 ./...
       - name: Write checksums
         run: |
           cd dist
@@ -258,23 +207,10 @@ jobs:
           tag_name: ${{ github.event.inputs.release_tag }}
           name: anydoc-go libraries ${{ github.event.inputs.release_tag }}
           body: |
-            Prebuilt anydoc-go libraries for every supported platform, built
-            from the pinned anydoc crate. Nothing is committed to the
-            repository: download the tarball for your platform and point cgo
-            at it (see the README, "Prebuilt libraries").
-
-            **Static** — the default build (`go build ./...`):
-
-            | Platform | Asset |
-            | --- | --- |
-            | linux/amd64 | `anydoc-static-linux_amd64.tar.gz` |
-            | linux/arm64 | `anydoc-static-linux_arm64.tar.gz` |
-            | darwin/amd64 | `anydoc-static-darwin_amd64.tar.gz` |
-            | darwin/arm64 | `anydoc-static-darwin_arm64.tar.gz` |
-            | windows/amd64 | `anydoc-static-windows_amd64.tar.gz` |
-            | windows/arm64 | `anydoc-static-windows_arm64.tar.gz` |
-
-            **Dynamic** — build with `-tags anydoc_dynamic`:
+            Prebuilt anydoc-go shared libraries for every supported platform,
+            built from the pinned anydoc crate. Nothing is committed to the
+            repository: download the tarball for your platform and point cgo at
+            it (see the README, "Prebuilt libraries").
 
             | Platform | Asset |
             | --- | --- |
@@ -285,11 +221,14 @@ jobs:
             | windows/amd64 | `anydoc-dynlib-windows_amd64.tar.gz` |
             | windows/arm64 | `anydoc-dynlib-windows_arm64.tar.gz` |
 
-            Each tarball lays out `lib/<platform>/<library>` plus
-            `include/anydoc.h`. Verify downloads with
-            `sha256sum -c SHA256SUMS` (`shasum -a 256 -c SHA256SUMS` on macOS).
+            Each tarball lays out `lib/<platform>/` (the `.so`/`.dylib`, or
+            `anydoc_go.dll` plus its import library on Windows) and
+            `include/anydoc.h`. The library is loaded at run time: put that
+            directory on `LD_LIBRARY_PATH` (Linux) or `DYLD_LIBRARY_PATH`
+            (macOS), or place `anydoc_go.dll` next to the executable (Windows).
+            Verify downloads with `sha256sum -c SHA256SUMS`
+            (`shasum -a 256 -c SHA256SUMS` on macOS).
           files: |
-            dist/anydoc-static-*.tar.gz
             dist/anydoc-dynlib-*.tar.gz
             dist/SHA256SUMS
           fail_on_unmatched_files: true

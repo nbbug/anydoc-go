@@ -1,19 +1,16 @@
 #!/usr/bin/env bash
-# Build the anydoc static archive and/or shared library for a single target.
+# Build the anydoc shared library for a single target.
 #
-# Both are Rust build artifacts produced by the pinned anydoc crate (see
-# Cargo.toml). They are published per platform from the "Build libraries"
-# workflow (`.github/workflows/build-libs.yml`) and downloaded by users; they
-# are not committed to the repository.
+# The shared library is a Rust cdylib produced by the pinned anydoc crate (see
+# Cargo.toml). It is published per platform from the "Build libraries" workflow
+# (`.github/workflows/build-libs.yml`) and downloaded by users; it is not
+# committed to the repository, and no static archive is built or shipped.
 #
 # Usage:
-#   scripts/build-anydoc-lib.sh                # host platform, static archive
+#   scripts/build-anydoc-lib.sh                # host platform
 #   TARGET=aarch64-unknown-linux-gnu scripts/build-anydoc-lib.sh
 #   TARGET=... BUILD_TOOL=cross scripts/build-anydoc-lib.sh    # cross (Docker)
 #   TARGET=... BUILD_TOOL=zigbuild scripts/build-anydoc-lib.sh # cargo-zigbuild
-#   LIBS=dynamic TARGET=... ...                # package the shared library
-#   LIBS=both TARGET=... ...                   # package both outputs
-#   DYLIB=1 TARGET=... ...                     # legacy alias for LIBS=dynamic
 #
 # BUILD_TOOL selects the Rust build driver:
 #   cargo    (default) plain cargo; the target must be installed and linkable
@@ -31,11 +28,11 @@ repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 cd "$repo_root"
 
 if ! command -v cargo >/dev/null 2>&1; then
-  echo "error: cargo not found. Install Rust (https://rustup.rs) to build the anydoc archive." >&2
+  echo "error: cargo not found. Install Rust (https://rustup.rs) to build the anydoc library." >&2
   exit 1
 fi
 
-# The Rust target triple decides the archive; the directory name mirrors what
+# The Rust target triple decides the library; the directory name mirrors what
 # the cgo LDFLAGS in the platform-specific Go files expect.
 target=${TARGET:-$(rustc -vV | sed -n 's/^host: //p')}
 case "$target" in
@@ -50,16 +47,6 @@ case "$target" in
     echo "Supported: {x86_64,aarch64}-apple-darwin, {x86_64,aarch64}-unknown-linux-gnu, {x86_64,aarch64}-pc-windows-msvc" >&2
     exit 1
     ;;
-esac
-
-# The MSVC target produces a COFF archive named anydoc_go.lib; every other
-# target produces the GNU archive libanydoc_go.a. Windows builds with MSVC
-# (matching the WeKnora binding): the MSVC toolchain cannot be redistributed,
-# so that target only builds on a native Windows host, and Go's cgo links the
-# .lib with mingw gcc.
-case "$target" in
-  x86_64-pc-windows-msvc | aarch64-pc-windows-msvc) lib_name=anydoc_go.lib ;;
-  *) lib_name=libanydoc_go.a ;;
 esac
 
 # The crate version to patch is read from Cargo.toml rather than repeated here,
@@ -167,7 +154,7 @@ if [ "$build_tool" = cargo ] && [ "$target" != "$(rustc -vV | sed -n 's/^host: /
   rustup target add "$target"
 fi
 
-echo "Building anydoc $anydoc_version archive for $target ($build_tool)"
+echo "Building anydoc $anydoc_version library for $target ($build_tool)"
 prepare_patched_anydoc
 
 # --locked: build exactly the dependency versions in the committed Cargo.lock.
@@ -176,10 +163,10 @@ prepare_patched_anydoc
 locked=""
 if [ -f Cargo.lock ]; then locked="--locked"; fi
 
-# Trim the archive without touching runtime behavior:
+# Trim the shared library without touching runtime behavior:
 # - -C link-dead-code=no: drop code unreachable from the exported ABI (the
 #   #[no_mangle] functions are the roots), so unused paths of the dependency
-#   tree never enter the archive
+#   tree never enter the library
 # - -C force-unwind-tables=no: skip unwind tables for functions that cannot
 #   unwind. Panic = unwind is kept: the ABI's panic containment (guarded)
 #   depends on it, and landing pads are still emitted where needed. The
@@ -192,199 +179,117 @@ case "$target" in
 esac
 export RUSTFLAGS="${RUSTFLAGS:-} $rustflags"
 
-# Windows archives must not be built with LTO (see the profile note in
-# Cargo.toml): fat LTO merges the whole graph into one object, this graph
-# crosses COFF's 65279-section limit, and rustc then emits a "bigobj" member
-# that Go's cgo linker-input check cannot parse at all -- no amount of section
-# stripping makes such an archive linkable. Cargo's per-profile environment
-# override keeps the Cargo.toml setting for every other platform.
-case "$target" in
-  *pc-windows-msvc) export CARGO_PROFILE_RELEASE_LTO=false ;;
-esac
-
 # Rebuild our own crate unconditionally: rust-cache restores target/ across
 # runs, and a poisoned fingerprint there is exactly the kind of staleness this
-# workflow must not ship (a stale archive links fine for every symbol except
+# workflow must not ship (a stale library links fine for every symbol except
 # the ones a newer ABI added). `cargo clean -p` panics on the Windows runner
 # (exit 101), so bump the crate's mtime instead — that recompiles and relinks
 # only this crate, leaving cached dependencies alone — and delete the old
-# archive so a skipped relink fails the copy below instead of shipping stale
+# library so a skipped relink fails the copy below instead of shipping stale
 # bytes.
 touch src/lib.rs
-rm -f "target/$target/release/$lib_name" \
-  "target/$target/release/libanydoc_go.so" \
+rm -f "target/$target/release/libanydoc_go.so" \
   "target/$target/release/libanydoc_go.dylib" \
   "target/$target/release/anydoc_go.dll" \
   "target/$target/release/anydoc_go.dll.lib"
 
 "$build_tool" build --release $locked --target "$target"
 
-# LIBS selects what to package. The cargo build always produces both outputs
-# (crate-type = ["staticlib", "cdylib"]); this only controls which files are
-# copied into lib/<platform>/ and validated.
-libs=${LIBS:-}
-if [ -z "$libs" ]; then
-  if [ "${DYLIB:-}" = "1" ]; then
-    libs=dynamic
-  else
-    libs=static
-  fi
-fi
-case "$libs" in
-  static | dynamic | both) ;;
-  *)
-    echo "error: LIBS must be static, dynamic, or both (got '$libs')" >&2
-    exit 1
-    ;;
-esac
-
 dest="lib/$lib_dir"
 mkdir -p "$dest"
 
-# Copy the cdylib output. Users download it from the GitHub release;
-# `anydoc_dynamic`-tag builds locate it through the cgo search path.
-copy_shared() {
-  case "$target" in
-    *pc-windows-msvc)
-      cp "target/$target/release/anydoc_go.dll" "$dest/anydoc_go.dll"
-      cp "target/$target/release/anydoc_go.dll.lib" "$dest/anydoc_go.dll.lib"
-      ;;
-    *apple-darwin)
-      cp "target/$target/release/libanydoc_go.dylib" "$dest/libanydoc_go.dylib"
-      ;;
-    *)
-      cp "target/$target/release/libanydoc_go.so" "$dest/libanydoc_go.so"
-      ;;
-  esac
-  echo "Wrote $dest (dynamic)"
-}
-
-if [ "$libs" = dynamic ]; then
-  copy_shared
-  exit 0
-fi
-
-cp "target/$target/release/$lib_name" "$dest/$lib_name"
-
-# Rust's precompiled std embeds LLVM bitcode in its objects, so every archive
-# above carries LTO IR (".llvmbc"/".llvmcmd" on ELF and COFF, the __LLVM
-# segment on Mach-O). Go 1.26.11 and 1.27.4 refuse to pass such a library to
-# the C linker, which is why the archive is stripped here, before the ABI
-# check below validates the bytes that get shipped.
-"$repo_root/scripts/strip-llvm-lto.sh" "$dest/$lib_name"
-
-# The header declares the ABI, so the archive must export every declared
-# function. A stale archive would otherwise surface only much later, as a Go
-# link failure in the workflow's smoke test; catch it here, next to the
-# artifact itself.
-#
-# Windows verifies with a minimal COFF scanner: the only nm on the runner is
-# x86_64 mingw-w64 nm, which cannot read the aarch64 MSVC archive (empty
-# output reads as "every symbol missing"). Everywhere else nm is used.
+# Copy the shared library: the only kind published. Windows gets the DLL plus
+# its import library, under both MSVC's .dll.lib name and mingw's
+# lib<anydoc_go>.dll.a name, so `-lanydoc_go` resolves for whichever linker
+# flavour Go's cgo ends up using.
 case "$target" in
   *pc-windows-msvc)
-    if command -v python3 >/dev/null 2>&1; then
-      python3 - "$dest/$lib_name" include/anydoc.h <<'PYEOF'
-import re, struct, sys
-path, header = sys.argv[1], sys.argv[2]
-declared = set()
-for line in open(header, encoding="utf-8", errors="replace"):
-    m = re.match(r"^[a-z_* ]*anydoc_[a-z_0-9]*\(", line)
-    if m:
-        declared.add(re.search(r"anydoc_[a-z_0-9]*", m.group(0)).group(0))
-data = open(path, "rb").read()
-found = set()
-pos = 8
-while pos < len(data):
-    if len(data) - pos < 60:
-        sys.exit(f"error: {path} has {len(data) - pos} stray bytes after the last member")
-    size = int(data[pos + 48:pos + 58].rstrip(b" "))
-    pos += 60
-    m = data[pos:pos + size]
-    pos += size + (size & 1)
-    if len(m) < 20:
-        continue
-    machine, _, _, symoff, nsyms, _, _ = struct.unpack_from("<HHIIIHH", m, 0)
-    if machine not in (0x8664, 0xAA64) or nsyms == 0 or symoff == 0:
-        continue
-    table = m[symoff:symoff + 18 * nsyms]
-    stroff = symoff + 18 * nsyms
-    for i in range(nsyms):
-        e = table[i * 18:(i + 1) * 18]
-        name, _, secnum, _, sclass, _ = struct.unpack("<8sIHHBB", e)
-        if sclass != 2 or secnum == 0:
-            continue
-        if name[:4] == b"\0\0\0\0":
-            so = struct.unpack("<I", name[4:8])[0]
-            nm = m[stroff + so:].split(b"\0", 1)[0]
-        else:
-            nm = name.split(b"\0", 1)[0]
-        found.add(nm.decode("utf-8", "replace"))
-missing = declared - found
-if missing:
-    sys.exit(f"error: {path} is missing declared ABI symbols: {sorted(missing)}")
-print(f"OK: {path} exports all {len(declared)} declared ABI symbols")
-PYEOF
-    fi
+    cp "target/$target/release/anydoc_go.dll" "$dest/anydoc_go.dll"
+    cp "target/$target/release/anydoc_go.dll.lib" "$dest/anydoc_go.dll.lib"
+    cp "target/$target/release/anydoc_go.dll.lib" "$dest/libanydoc_go.dll.a"
+    ;;
+  *apple-darwin)
+    cp "target/$target/release/libanydoc_go.dylib" "$dest/libanydoc_go.dylib"
     ;;
   *)
-    if command -v nm >/dev/null 2>&1; then
-      # nm can exit non-zero on members it cannot read (for example when the
-      # toolchain's nm predates the LLVM that produced the archive); it still
-      # prints every symbol it managed to read. `|| true` keeps that partial
-      # success from tripping set -e; the symbol comparison below stays
-      # authoritative. An empty result fails loudly instead of silently.
-      symbols=$(nm -gU "$dest/$lib_name" 2>/dev/null) || true
-      exported=$(printf '%s\n' "$symbols" | awk '{print $NF}' | sed 's/^_//' | grep '^anydoc_' | grep -v ':$' | sort -u) || true
-      declared=$(grep -o '^[a-z_* ]*anydoc_[a-z_0-9]*(' include/anydoc.h | grep -o 'anydoc_[a-z_0-9]*' | sort -u) || true
-      if [ -z "$declared" ]; then
-        echo "error: no anydoc_* function declarations found in include/anydoc.h" >&2
-        exit 1
-      fi
-      missing=""
-      for sym in $declared; do
-        if ! printf '%s\n' "$exported" | grep -qx "$sym"; then
-          missing="$missing $sym"
-        fi
-      done
-      if [ -n "$missing" ]; then
-        echo "error: $dest/$lib_name is missing declared ABI symbols:$missing" >&2
-        echo "The archive is stale or the rebuild was skipped; delete target/ and rebuild." >&2
-        exit 1
-      fi
-    fi
+    cp "target/$target/release/libanydoc_go.so" "$dest/libanydoc_go.so"
     ;;
 esac
 
-# The archive must end exactly at its last member. A duplicated or appended
-# tail (seen once already: CI artifact-merge corruption) parses as garbage
-# member headers and fails at link time with "archive member invalid control
-# bits"; catch it here instead. Skipped where python3 is unavailable.
-if command -v python3 >/dev/null 2>&1; then
-  python3 - "$dest/$lib_name" <<'PYEOF'
-import sys
-path = sys.argv[1]
-with open(path, "rb") as f:
-    data = f.read()
-if not data.startswith(b"!<arch>\n"):
-    sys.exit(f"error: {path} does not start with an ar magic header")
-pos = 8
-while pos < len(data):
-    if len(data) - pos < 60:
-        sys.exit(f"error: {path} has {len(data) - pos} stray bytes after the last member")
-    size_field = data[pos + 48:pos + 58].rstrip(b" ")
-    try:
-        size = int(size_field)
-    except ValueError:
-        sys.exit(f"error: {path} member header at offset {pos} has a non-numeric size field")
-    pos += 60 + size + (size & 1)  # members are padded to even length
-if pos != len(data):
-    sys.exit(f"error: {path} is {len(data) - pos} bytes longer than its members declare")
-PYEOF
+# The header declares the ABI, so the library must export every declared
+# function: a stale or half-relinked build would otherwise surface much later,
+# as a link or load failure. Linux and macOS are checked with llvm-nm when
+# rustup's llvm-tools are installed, otherwise with the host nm. Windows has no
+# nm on the runner that reads both architectures' DLLs, so there the files are
+# only checked for existence and size; rustc exports every #[no_mangle]
+# function by construction.
+case "$target" in
+  *pc-windows-msvc)
+    for f in anydoc_go.dll anydoc_go.dll.lib; do
+      if [ ! -s "$dest/$f" ]; then
+        echo "error: $dest/$f is missing or empty; delete target/ and rebuild" >&2
+        exit 1
+      fi
+    done
+    echo "Wrote $dest (shared)"
+    exit 0
+    ;;
+esac
+
+lib_file="$dest/libanydoc_go.so"
+case "$target" in
+  *apple-darwin) lib_file="$dest/libanydoc_go.dylib" ;;
+esac
+
+declared=$(grep -o '^[a-z_* ]*anydoc_[a-z_0-9]*(' include/anydoc.h | grep -o 'anydoc_[a-z_0-9]*' | sort -u) || true
+if [ -z "$declared" ]; then
+  echo "error: no anydoc_* function declarations found in include/anydoc.h" >&2
+  exit 1
 fi
 
-if [ "$libs" = both ]; then
-  copy_shared
+# llvm-nm (rustup's llvm-tools) reads every Rust target, so a Linux host can
+# verify an arm64 build; a host binutils nm usually cannot, and may be missing
+# entirely. Either way the symbol comparison below stays authoritative, and an
+# empty result fails loudly instead of silently.
+nm_bin=""
+if command -v rustc >/dev/null 2>&1; then
+  sysroot=$(rustc --print sysroot 2>/dev/null | tr -d '\r' || true)
+  for candidate in "$sysroot"/lib/rustlib/*/bin/llvm-nm "$sysroot"/lib/rustlib/*/bin/llvm-nm.exe; do
+    if [ -x "$candidate" ]; then
+      nm_bin=$candidate
+      break
+    fi
+  done
+fi
+if [ -z "$nm_bin" ]; then
+  for candidate in llvm-nm nm; do
+    if command -v "$candidate" >/dev/null 2>&1; then
+      nm_bin=$(command -v "$candidate")
+      break
+    fi
+  done
+fi
+if [ -z "$nm_bin" ]; then
+  echo "error: no llvm-nm or nm found to verify $lib_file (install binutils or llvm-tools)" >&2
+  exit 1
+fi
+# -D lists the dynamic symbol table (ELF); -g/-U keep external, defined symbols
+# (Mach-O).
+case "$target" in
+  *apple-darwin) symbols=$("$nm_bin" -gU "$lib_file" 2>/dev/null) || true ;;
+  *) symbols=$("$nm_bin" -D --defined-only "$lib_file" 2>/dev/null) || true ;;
+esac
+exported=$(printf '%s\n' "$symbols" | awk '{print $NF}' | sed 's/^_//' | grep '^anydoc_' | sort -u) || true
+missing=""
+for sym in $declared; do
+  if ! printf '%s\n' "$exported" | grep -qx "$sym"; then
+    missing="$missing $sym"
+  fi
+done
+if [ -n "$missing" ]; then
+  echo "error: $lib_file is missing declared ABI symbols:$missing" >&2
+  echo "The library is stale or the rebuild was skipped; delete target/ and rebuild." >&2
+  exit 1
 fi
 
-echo "Wrote $dest/$lib_name (static)"
+echo "Wrote $dest (shared)"

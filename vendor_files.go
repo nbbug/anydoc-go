@@ -10,10 +10,9 @@ package anydoc
 // every build configuration. The variable is never referenced — the linker
 // eliminates the bytes from binaries.
 //
-// Static and shared libraries are downloaded from the GitHub release, not
-// embedded or vendored. Extract one kind into lib/<platform>/ under the
-// vendored module, or point CGO_LDFLAGS at it (see the README, "Prebuilt
-// libraries").
+// The shared library is downloaded from the GitHub release, not embedded or
+// vendored. Extract it into lib/<platform>/ under the vendored module, or
+// point CGO_LDFLAGS at it (see the README, "Prebuilt libraries").
 
 import _ "embed"
 

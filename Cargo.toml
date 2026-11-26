@@ -1,10 +1,9 @@
 # Go bindings for anydoc.
 #
-# `crate-type = ["staticlib", "cdylib"]`: the Go bindings link the static
-# archive by default; the cdylib output powers the opt-in `anydoc_dynamic`
-# build. Both are published per platform by the Build libraries workflow; they
-# are not embedded in the Go module. Not a plain cdylib: cgo wants either an
-# archive it can pull symbols from or an import library for a dylib.
+# `crate-type = ["cdylib"]`: the Go bindings link the shared library, which the
+# Build libraries workflow publishes per platform; the module itself carries no
+# binary. No staticlib is built: the archive was only there to be linked into
+# Go binaries, and the shared library covers every supported platform.
 [package]
 name = "anydoc-go"
 version = "0.2.5"
@@ -16,7 +15,7 @@ repository = "https://github.com/firecrawl/anydoc"
 publish = false
 
 [lib]
-crate-type = ["staticlib", "cdylib"]
+crate-type = ["cdylib"]
 
 # Standalone crate: it lives outside the anydoc workspace, so it takes the
 # published crate rather than a path dependency.
@@ -35,14 +34,10 @@ anydoc = { path = "patched-anydoc" }
 
 [workspace]
 
-# The archive is a staticlib consumed by the Go linker, so build time is paid
-# once in CI while runtime size and speed win:
-# - fat LTO (whole-graph dead-code elimination and cross-crate inlining) beats
-#   thin LTO for a library that is linked as a unit. Windows is the exception:
-#   build-anydoc-lib.sh sets CARGO_PROFILE_RELEASE_LTO=false for MSVC targets,
-#   because the merged object passes COFF's 65279-section limit and rustc then
-#   emits a "bigobj" member, which Go's cgo linker-input check cannot parse.
-# - strip keeps debug symbols and local symbol names out of the archive
+# The shared library is consumed through a C ABI, so build time is paid once in
+# CI while runtime size and speed win:
+# - fat LTO (whole-graph dead-code elimination and cross-crate inlining)
+# - strip keeps debug symbols and local symbol names out of the library
 [profile.release]
 lto = true
 codegen-units = 1

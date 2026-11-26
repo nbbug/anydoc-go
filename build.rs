@@ -1,7 +1,7 @@
-//! Regenerate `include/anydoc.h` from the crate's C ABI on every build.
-//! `cbindgen` is a build-dependency, so this runs whenever `cargo build`
-//! runs. The committed header is the source of truth for the Go side;
-//! consumers link the packaged static archive and never run this.
+//! Regenerate `include/anydoc.h` from the crate's C ABI on every build, and
+//! pin the shared library's runtime name. `cbindgen` is a build-dependency, so
+//! this runs whenever `cargo build` runs; the committed header is the source of
+//! truth for the Go side.
 
 use std::path::PathBuf;
 
@@ -29,6 +29,17 @@ fn main() {
         Err(err) => {
             println!("cargo:warning=cbindgen failed to generate anydoc.h: {err}");
         }
+    }
+
+    // The library ships as a release asset and is found through the loader's
+    // search path, so record a stable runtime name. Left to the defaults, the
+    // installed name (macOS) and the DT_NEEDED entry (Linux) end up naming this
+    // build's output directory, and programs linked against the shipped
+    // library would look for it there.
+    match std::env::var("CARGO_CFG_TARGET_OS").unwrap_or_default().as_str() {
+        "macos" => println!("cargo:rustc-link-arg-cdylib=-Wl,-install_name,@rpath/libanydoc_go.dylib"),
+        "linux" => println!("cargo:rustc-link-arg-cdylib=-Wl,-soname,libanydoc_go.so"),
+        _ => {}
     }
 
     println!("cargo:rerun-if-changed=src/lib.rs");

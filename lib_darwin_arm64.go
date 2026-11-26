@@ -1,20 +1,21 @@
-//go:build darwin && arm64 && cgo && !anydoc_dynamic
+//go:build darwin && arm64 && cgo
 
 package anydoc
 
 /*
-#cgo LDFLAGS: -L${SRCDIR}/lib/darwin_arm64 -lanydoc_go -lm
+#cgo LDFLAGS: -L${SRCDIR}/lib/darwin_arm64 -lanydoc_go -Wl,-rpath,${SRCDIR}/lib/darwin_arm64
 */
 import "C"
 
-// Static build: the archive is not embedded in the module. Download
-// anydoc-static-darwin_arm64.tar.gz from the GitHub release and extract it so
-// the ${SRCDIR}/lib/darwin_arm64 search path above finds libanydoc_go.a, or point
-// CGO_LDFLAGS at the directory that holds it:
+// This build links the shared library from the GitHub release
+// (anydoc-dynlib-darwin_arm64.tar.gz). Extract the tarball so
+// ${SRCDIR}/lib/darwin_arm64 holds libanydoc_go.dylib, or point CGO_LDFLAGS at the
+// directory that holds it:
 //
-//   CGO_LDFLAGS="-L/path/to/lib/darwin_arm64" go build ./...
+//	CGO_LDFLAGS="-L/path/to/lib/darwin_arm64" go build ./...
 //
-// Extract only one kind (static or shared) into a given lib directory: when
-// both are present, the linker prefers the shared library.
+// The link line records an rpath to ${SRCDIR}/lib/darwin_arm64, so a library
+// extracted inside the module is found at run time too. A copy shipped
+// elsewhere must be on DYLD_LIBRARY_PATH or in a standard loader path.
 //
 // See the README's "Prebuilt libraries" section.
